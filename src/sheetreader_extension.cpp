@@ -74,13 +74,11 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 	}
 
 	Vector &column = output.data[0];
-	// Value filename = Value("Hello World, here is your sheet name: " + bind_data.file_names[0]);
-	// Value sheetname = Value("Hello World, here is your sheet name: " + bind_data.sheet_name);
-	// column.SetValue(0, filename);
-	// column.SetValue(1, sheetname);
-	Value hello = Value("Hello World");
-	column.SetValue(0, hello);
-	output.SetCardinality(1);
+	Value filename = Value("Hello World, here is your sheet name: " + bind_data.file_names[0]);
+	Value sheetname = Value("Hello World, here is your sheet name: " + bind_data.sheet_name);
+	column.SetValue(0, filename);
+	column.SetValue(1, sheetname);
+	output.SetCardinality(2);
 
 	gstate.read_count = 1;
 	lstate.scan_count = 1;
@@ -98,12 +96,12 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	bind_data->file_names = MultiFileReader::GetFileList(context, input.inputs[0], ".XLSX (Excel)");
 
 	// Here we could handle any named parameters
-	// for (auto &kv : input.named_parameters) {
-	// 	auto loption = StringUtil::Lower(kv.first);
-	// 	if (loption == "sheetname") {
-	// 		bind_data->sheet_name = StringValue::Get(kv.second);
-	// 	}
-	// }
+	for (auto &kv : input.named_parameters) {
+		auto loption = StringUtil::Lower(kv.first);
+		if (loption == "sheetname") {
+			bind_data->sheet_name = StringValue::Get(kv.second);
+		}
+	}
 
 	return_types = {LogicalType::VARCHAR};
 	names = {"Hello World column"};
@@ -117,7 +115,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	                                         SheetreaderBindFun, SheetreaderGlobalTableFunctionState::Init,
 	                                         SheetreaderLocalTableFunctionState::Init);
 
-	// sheetreader_table_function.named_parameters["sheetname"] = LogicalType::VARCHAR;
+	sheetreader_table_function.named_parameters["sheetname"] = LogicalType::VARCHAR;
 
 	ExtensionUtil::RegisterFunction(instance, sheetreader_table_function);
 
