@@ -16,47 +16,44 @@
 
 namespace duckdb {
 
-SheetreaderScanData::SheetreaderScanData() {
+SRScanData::SRScanData() {
 }
 
-SheetreaderScanData::SheetreaderScanData(ClientContext &context, vector<string> file_names, string sheet_name)
+SRScanData::SRScanData(ClientContext &context, vector<string> file_names, string sheet_name)
     : file_names(std::move(file_names)), sheet_name(std::move(sheet_name)) {
 	// InitializeReaders(context);
 	// InitializeFormats();
 }
 
-SheetreaderScanGlobalState::SheetreaderScanGlobalState(ClientContext &context, const SheetreaderScanData &bind_data)
-    : bind_data(bind_data) {
+SRScanGlobalState::SRScanGlobalState(ClientContext &context, const SRScanData &bind_data)
+    : bind_data(bind_data), read_count(0) {
 }
 
-SheetreaderScanLocalState::SheetreaderScanLocalState(ClientContext &context, SheetreaderScanGlobalState &gstate)
-    : scan_count(0) {
+SRScanLocalState::SRScanLocalState(ClientContext &context, SRScanGlobalState &gstate) : scan_count(0) {
 }
 
-SheetreaderGlobalTableFunctionState::SheetreaderGlobalTableFunctionState(ClientContext &context,
-                                                                         TableFunctionInitInput &input)
-    : state(context, input.bind_data->Cast<SheetreaderScanData>()) {
+SRGlobalTableFunctionState::SRGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input)
+    : state(context, input.bind_data->Cast<SRScanData>()) {
 }
 
-unique_ptr<GlobalTableFunctionState> SheetreaderGlobalTableFunctionState::Init(ClientContext &context,
-                                                                               TableFunctionInitInput &input) {
-	auto &bind_data = input.bind_data->Cast<SheetreaderScanData>();
-	auto result = make_uniq<SheetreaderGlobalTableFunctionState>(context, input);
+unique_ptr<GlobalTableFunctionState> SRGlobalTableFunctionState::Init(ClientContext &context,
+                                                                      TableFunctionInitInput &input) {
+	auto &bind_data = input.bind_data->Cast<SRScanData>();
+	auto result = make_uniq<SRGlobalTableFunctionState>(context, input);
 	auto &gstate = result->state;
 
 	return std::move(result);
 }
 
-SheetreaderLocalTableFunctionState::SheetreaderLocalTableFunctionState(ClientContext &context,
-                                                                       SheetreaderScanGlobalState &gstate)
+SRLocalTableFunctionState::SRLocalTableFunctionState(ClientContext &context, SRScanGlobalState &gstate)
     : state(context, gstate) {
 }
 
-unique_ptr<LocalTableFunctionState> SheetreaderLocalTableFunctionState::Init(ExecutionContext &context,
-                                                                             TableFunctionInitInput &input,
-                                                                             GlobalTableFunctionState *global_state) {
-	auto &gstate = global_state->Cast<SheetreaderGlobalTableFunctionState>();
-	auto result = make_uniq<SheetreaderLocalTableFunctionState>(context.client, gstate.state);
+unique_ptr<LocalTableFunctionState> SRLocalTableFunctionState::Init(ExecutionContext &context,
+                                                                    TableFunctionInitInput &input,
+                                                                    GlobalTableFunctionState *global_state) {
+	auto &gstate = global_state->Cast<SRGlobalTableFunctionState>();
+	auto result = make_uniq<SRLocalTableFunctionState>(context.client, gstate.state);
 
 	return std::move(result);
 }
@@ -64,10 +61,25 @@ unique_ptr<LocalTableFunctionState> SheetreaderLocalTableFunctionState::Init(Exe
 inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 
 	// Get the bind dataclass TARGET
-	const SheetreaderScanData &bind_data = data_p.bind_data->Cast<SheetreaderScanData>();
-	auto &gstate = data_p.global_state->Cast<SheetreaderGlobalTableFunctionState>().state;
-	auto &lstate = data_p.local_state->Cast<SheetreaderLocalTableFunctionState>().state;
+	const SRScanData &bind_data = data_p.bind_data->Cast<SRScanData>();
+	auto &gstate = data_p.global_state->Cast<SRGlobalTableFunctionState>().state;
+	auto &lstate = data_p.local_state->Cast<SRLocalTableFunctionState>().state;
 	// Create a single chunk with a single string column
+
+	if (gstate.read_count == 1) {
+		Vector &column = output.data[0];
+		Value filename = Value("Hello World, here is your sheet name: " + bind_data.file_names[0]);
+		Value sheetname = Value("Hello World, here is your sheet name: " + bind_data.sheet_name);
+		column.SetValue(0, filename);
+		column.SetValue(1, sheetname);
+		Vector &column2 = output.data[1];
+		column2.SetValue(0, Value("Row 1"));
+		column2.SetValue(1, Value("Row 2"));
+		output.SetCardinality(2);
+		gstate.read_count++;
+		return;
+	}
+
 	if (gstate.read_count > 0) {
 		output.SetCardinality(0);
 		return;
@@ -78,6 +90,10 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 	Value sheetname = Value("Hello World, here is your sheet name: " + bind_data.sheet_name);
 	column.SetValue(0, filename);
 	column.SetValue(1, sheetname);
+
+	Vector &column2 = output.data[1];
+	column2.SetValue(0, Value("Row 1"));
+	column2.SetValue(1, Value("Row 2"));
 	output.SetCardinality(2);
 
 	gstate.read_count = 1;
@@ -87,13 +103,20 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 
-	auto bind_data = make_uniq<SheetreaderScanData>();
+	auto bind_data = make_uniq<SRScanData>();
 	// TODO: Do we need any information from info?
 	// TableFunctionInfo *info = input.info.get();
 
 	// Get the file names from the first parameter
 	// Note: GetFileList also checks if the files exist
 	bind_data->file_names = MultiFileReader::GetFileList(context, input.inputs[0], ".XLSX (Excel)");
+
+	if (bind_data->file_names.size() == 0) {
+		throw BinderException("No files found in path");
+	} else if (bind_data->file_names.size() > 1) {
+		// TODO: Support multiple files
+		throw BinderException("Only one file can be read at a time");
+	}
 
 	// Here we could handle any named parameters
 	for (auto &kv : input.named_parameters) {
@@ -103,31 +126,21 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		}
 	}
 
-	return_types = {LogicalType::VARCHAR};
-	names = {"Hello World column"};
+	return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+	names = {"Hello World column", "Second column"};
 
-	return bind_data;
+	return std::move(bind_data);
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register a table function
 	TableFunction sheetreader_table_function("sheetreader", {LogicalType::VARCHAR}, SheetreaderTableFun,
-	                                         SheetreaderBindFun, SheetreaderGlobalTableFunctionState::Init,
-	                                         SheetreaderLocalTableFunctionState::Init);
+	                                         SheetreaderBindFun, SRGlobalTableFunctionState::Init,
+	                                         SRLocalTableFunctionState::Init);
 
 	sheetreader_table_function.named_parameters["sheetname"] = LogicalType::VARCHAR;
 
 	ExtensionUtil::RegisterFunction(instance, sheetreader_table_function);
-
-	// // Register a scalar function
-	// auto sheetreader_scalar_function = ScalarFunction("sheetreader", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	// SheetreaderScalarFun); ExtensionUtil::RegisterFunction(instance, sheetreader_scalar_function);
-
-	// // Register another scalar function
-	// auto sheetreader_openssl_version_scalar_function = ScalarFunction("sheetreader_openssl_version",
-	// {LogicalType::VARCHAR},
-	//                                             LogicalType::VARCHAR, SheetreaderOpenSSLVersionScalarFun);
-	// ExtensionUtil::RegisterFunction(instance, sheetreader_openssl_version_scalar_function);
 }
 
 void SheetreaderExtension::Load(DuckDB &db) {

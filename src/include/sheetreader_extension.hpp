@@ -12,9 +12,11 @@ public:
 	std::string Name() override;
 };
 
-struct SheetreaderScanData : public TableFunctionData {
+//! We call this ScanData analog to the JSONScanData -- BindData would be a better name
+// TODO: Or should this renamed to SRReadData as in ReadCSVData?
+struct SRScanData : public TableFunctionData {
 public:
-	SheetreaderScanData();
+	SRScanData();
 
 	// void Bind(ClientContext &context, TableFunctionBindInput &input);
 
@@ -26,56 +28,34 @@ public:
 	// static unique_ptr<SheetreaderScanData> Deserialize(Deserializer &deserializer);
 
 public:
-	//! The files we're reading
+	//! The paths of the files we're reading
 	vector<string> file_names;
 
 	//! Name of the sheet to read
 	string sheet_name;
 	
-
-	// //! Whether or not we should ignore malformed JSON (default to NULL)
-	// bool ignore_errors = false;
-	// //! Maximum JSON object size (defaults to 16MB minimum)
-	// idx_t maximum_object_size = 16777216;
-	// //! Whether we auto-detect a schema
-	// bool auto_detect = false;
-	// //! Sample size for detecting schema
-	// idx_t sample_size = idx_t(STANDARD_VECTOR_SIZE) * 10;
-	// //! Max depth we go to detect nested JSON schema (defaults to unlimited)
-	// idx_t max_depth = NumericLimits<idx_t>::Maximum();
-	// //! We divide the number of appearances of each JSON field by the auto-detection sample size
-	// //! If the average over the fields of an object is less than this threshold,
-	// //! we default to the JSON type for this object rather than the shredded type
-	// double field_appearance_threshold = 0.1;
-	// //! The maximum number of files we sample to sample sample_size rows
-	// idx_t maximum_sample_files = 32;
-	// //! Whether we auto-detect and convert JSON strings to integers
-	// bool convert_strings_to_integers = false;
-
 	//! All column names (in order)
 	vector<string> names;
 
-	//! The inferred avg tuple size
-	idx_t avg_tuple_size = 420;
 private:
-	SheetreaderScanData(ClientContext &context, vector<string> file_names, string sheet_name);
+	SRScanData(ClientContext &context, vector<string> file_names, string sheet_name);
 
 };
-struct SheetreaderScanGlobalState {
+struct SRScanGlobalState {
 public:
-	SheetreaderScanGlobalState(ClientContext &context, const SheetreaderScanData &bind_data);
+	SRScanGlobalState(ClientContext &context, const SRScanData &bind_data);
 
 public:
 	//! Bound data
-	const SheetreaderScanData &bind_data;
+	const SRScanData &bind_data;
 
 	//! Number of reads so far
-	idx_t read_count = 0;
+	idx_t read_count;
 };
 
-struct SheetreaderScanLocalState {
+struct SRScanLocalState {
 public:
-	SheetreaderScanLocalState(ClientContext &context, SheetreaderScanGlobalState &gstate);
+	SRScanLocalState(ClientContext &context, SRScanGlobalState &gstate);
 
 // public:
 // 	idx_t ReadNext(JSONScanGlobalState &gstate);
@@ -85,22 +65,22 @@ public:
 	idx_t scan_count;
 };
 
-struct SheetreaderGlobalTableFunctionState : public GlobalTableFunctionState {
+struct SRGlobalTableFunctionState : public GlobalTableFunctionState {
 public:
-	SheetreaderGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input);
+	SRGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input);
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input);
 
 public:
-	SheetreaderScanGlobalState state;
+	SRScanGlobalState state;
 };
 
-struct SheetreaderLocalTableFunctionState : public LocalTableFunctionState {
+struct SRLocalTableFunctionState : public LocalTableFunctionState {
 public:
-	SheetreaderLocalTableFunctionState(ClientContext &context, SheetreaderScanGlobalState &gstate);
+	SRLocalTableFunctionState(ClientContext &context, SRScanGlobalState &gstate);
 	static unique_ptr<LocalTableFunctionState> Init(ExecutionContext &context, TableFunctionInitInput &input,
 	                                                GlobalTableFunctionState *global_state);
 
 public:
-	SheetreaderScanLocalState state;
+	SRScanLocalState state;
 };
 } // namespace duckdb
