@@ -1,7 +1,12 @@
+#include "duckdb.h"
 #include "duckdb/common/multi_file_reader.hpp"
+#include "duckdb/common/typedefs.hpp"
+#include "duckdb/common/types/string_type.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/function/function.hpp"
+
+#include <string>
 #define DUCKDB_EXTENSION_MAIN
 
 #include "duckdb.hpp"
@@ -26,10 +31,30 @@ SRScanData::SRScanData(ClientContext &context, vector<string> file_names, string
 }
 
 SRScanGlobalState::SRScanGlobalState(ClientContext &context, const SRScanData &bind_data)
-    : bind_data(bind_data), read_count(0) {
+    : bind_data(bind_data), chunk_count(0) {
 }
 
-SRScanLocalState::SRScanLocalState(ClientContext &context, SRScanGlobalState &gstate) : scan_count(0) {
+SRScanLocalState::SRScanLocalState(ClientContext &context, SRScanGlobalState &gstate)
+    : scan_count(0), bind_data(gstate.bind_data) {
+}
+
+idx_t SRScanLocalState::ReadNextBatch(SRScanGlobalState &gstate) {
+	// TODO: Reset allocated memory from last batch
+
+	// Reset scan_count
+	scan_count = 0;
+
+	// TODO: Get next batch of data from SheetReader
+	GetNextBatchFromSR(gstate);
+
+	return scan_count;
+}
+
+void SRScanLocalState::GetNextBatchFromSR(SRScanGlobalState &gstate) {
+	if (gstate.chunk_count > 1) {
+		scan_count = 0;
+	}
+	scan_count = 2048;
 }
 
 SRGlobalTableFunctionState::SRGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input)
@@ -58,29 +83,40 @@ unique_ptr<LocalTableFunctionState> SRLocalTableFunctionState::Init(ExecutionCon
 	return std::move(result);
 }
 
+void FillChunk(DataChunk &output, idx_t scan_count) {
+	// TODO: Do speed test -- mayb SetValue is faster here?
+
+	// Fill the output chunk with data
+	// For now, we just fill it with dummy data
+	for (idx_t col = 0; col < output.ColumnCount(); col++) {
+		Vector &vec = output.data[col];
+		auto data = FlatVector::GetData<string_t>(vec);
+		// auto &validity = FlatVector::Validity(vec);
+		for (idx_t i = 0; i < scan_count; i++) {
+			string_t &tmp = data[i];
+			tmp = "Row: " + std::to_string(i);
+		}
+	}
+}
+
 inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 
 	// Get the bind dataclass TARGET
 	const SRScanData &bind_data = data_p.bind_data->Cast<SRScanData>();
 	auto &gstate = data_p.global_state->Cast<SRGlobalTableFunctionState>().state;
 	auto &lstate = data_p.local_state->Cast<SRLocalTableFunctionState>().state;
-	// Create a single chunk with a single string column
 
-	if (gstate.read_count == 1) {
-		Vector &column = output.data[0];
-		Value filename = Value("Hello World, here is your sheet name: " + bind_data.file_names[0]);
-		Value sheetname = Value("Hello World, here is your sheet name: " + bind_data.sheet_name);
-		column.SetValue(0, filename);
-		column.SetValue(1, sheetname);
-		Vector &column2 = output.data[1];
-		column2.SetValue(0, Value("Row 1"));
-		column2.SetValue(1, Value("Row 2"));
-		output.SetCardinality(2);
-		gstate.read_count++;
+	const idx_t column_count = output.ColumnCount();
+
+
+  // TODO: Fix this
+	idx_t iterations = bind_data.iterations ? bind_data.iterations : 1;
+	if (gstate.chunk_count < iterations) {
+		FillChunk(output, 2048);
+		output.SetCardinality(2048);
+		gstate.chunk_count++;
 		return;
-	}
-
-	if (gstate.read_count > 0) {
+	} else {
 		output.SetCardinality(0);
 		return;
 	}
@@ -96,7 +132,7 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 	column2.SetValue(1, Value("Row 2"));
 	output.SetCardinality(2);
 
-	gstate.read_count = 1;
+	gstate.chunk_count = 1;
 	lstate.scan_count = 1;
 }
 
@@ -123,6 +159,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "sheetname") {
 			bind_data->sheet_name = StringValue::Get(kv.second);
+		} else if (loption == "i") {
+			bind_data->iterations = IntegerValue::Get(kv.second);
 		}
 	}
 
@@ -139,6 +177,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	                                         SRLocalTableFunctionState::Init);
 
 	sheetreader_table_function.named_parameters["sheetname"] = LogicalType::VARCHAR;
+	sheetreader_table_function.named_parameters["i"] = LogicalType::INTEGER;
 
 	ExtensionUtil::RegisterFunction(instance, sheetreader_table_function);
 }

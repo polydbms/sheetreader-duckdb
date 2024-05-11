@@ -33,6 +33,9 @@ public:
 
 	//! Name of the sheet to read
 	string sheet_name;
+
+	//! For testing purposes
+	idx_t iterations;
 	
 	//! All column names (in order)
 	vector<string> names;
@@ -50,19 +53,24 @@ public:
 	const SRScanData &bind_data;
 
 	//! Number of reads so far
-	idx_t read_count;
+	idx_t chunk_count;
 };
 
 struct SRScanLocalState {
 public:
 	SRScanLocalState(ClientContext &context, SRScanGlobalState &gstate);
 
-// public:
-// 	idx_t ReadNext(JSONScanGlobalState &gstate);
+public:
+	//! Get next batch of data and return number of rows gathered
+  idx_t ReadNextBatch(SRScanGlobalState &gstate);
+	void GetNextBatchFromSR(SRScanGlobalState &gstate);
 
 public:
 	//! Current scan data
 	idx_t scan_count;
+
+private:
+	const SRScanData &bind_data;
 };
 
 struct SRGlobalTableFunctionState : public GlobalTableFunctionState {
