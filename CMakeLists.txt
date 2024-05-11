@@ -18,7 +18,7 @@ set(EXTENSION_SOURCES src/sheetreader_extension.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 # TODO: We might need this at some point -- this is probably faster to build
-# build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
+build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
 install(
   TARGETS ${EXTENSION_NAME}
