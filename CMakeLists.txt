@@ -9,12 +9,15 @@ set(TARGET_NAME sheetreader)
 # find_package(Example-Package REQUIRED)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
-# set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
+set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
 include_directories(src/include)
+include_directories(src/include/sheetreader)
+include_directories(src/include/sheetreader/fast_double_parser)
+include_directories(src/include/sheetreader/miniz)
 
-set(EXTENSION_SOURCES src/sheetreader_extension.cpp)
+set(EXTENSION_SOURCES src/sheetreader_extension.cpp src/include/sheetreader/XlsxFile.cpp src/include/sheetreader/XlsxSheet.cpp src/include/sheetreader/miniz/miniz.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 # TODO: We might need this at some point -- this is probably faster to build

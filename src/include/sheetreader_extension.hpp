@@ -4,6 +4,8 @@
 #include "duckdb.hpp"
 #include "duckdb/function/function.hpp"
 
+#include "sheetreader/XlsxFile.h"
+
 namespace duckdb {
 
 class SheetreaderExtension : public Extension {
@@ -39,6 +41,8 @@ public:
 	
 	//! All column names (in order)
 	vector<string> names;
+
+	XlsxFile xlsx_file;
 
 private:
 	SRScanData(ClientContext &context, vector<string> file_names, string sheet_name);

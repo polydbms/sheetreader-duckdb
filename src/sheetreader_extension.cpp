@@ -5,6 +5,7 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/function/function.hpp"
+#include "sheetreader/XlsxFile.h"
 
 #include <string>
 #define DUCKDB_EXTENSION_MAIN
@@ -21,11 +22,12 @@
 
 namespace duckdb {
 
-SRScanData::SRScanData() {
+// TODO: Fix default constructor
+SRScanData::SRScanData() : xlsx_file("") {
 }
 
 SRScanData::SRScanData(ClientContext &context, vector<string> file_names, string sheet_name)
-    : file_names(std::move(file_names)), sheet_name(std::move(sheet_name)) {
+    : file_names(std::move(file_names)), sheet_name(std::move(sheet_name)), xlsx_file(file_names[0]) {
 	// InitializeReaders(context);
 	// InitializeFormats();
 }
@@ -108,6 +110,7 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 
 	const idx_t column_count = output.ColumnCount();
 
+	XlsxFile file(bind_data.file_names[0]);
 
   // TODO: Fix this
 	idx_t iterations = bind_data.iterations ? bind_data.iterations : 1;
