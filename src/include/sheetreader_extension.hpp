@@ -2,9 +2,12 @@
 
 #include "duckdb.h"
 #include "duckdb.hpp"
+#include "duckdb/common/typedefs.hpp"
+#include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/function/function.hpp"
 
 #include "sheetreader/XlsxFile.h"
+#include "sheetreader/XlsxSheet.h"
 
 namespace duckdb {
 
@@ -18,7 +21,7 @@ public:
 // TODO: Or should this renamed to SRReadData as in ReadCSVData?
 struct SRScanData : public TableFunctionData {
 public:
-	SRScanData();
+	SRScanData(string file_name);
 
 	// void Bind(ClientContext &context, TableFunctionBindInput &input);
 
@@ -37,12 +40,19 @@ public:
 	string sheet_name;
 
 	//! For testing purposes
-	idx_t iterations;
+	idx_t iterations=1;
 	
 	//! All column names (in order)
 	vector<string> names;
 
+	//! All column types (in order)
+	vector<LogicalType> types;
+
 	XlsxFile xlsx_file;
+	unique_ptr< XlsxSheet> xlsx_sheet;
+
+	// TODO: Which default value should be used?
+	idx_t number_threads=4;
 
 private:
 	SRScanData(ClientContext &context, vector<string> file_names, string sheet_name);
