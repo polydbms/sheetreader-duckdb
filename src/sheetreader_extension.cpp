@@ -3,6 +3,7 @@
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/multi_file_reader.hpp"
 #include "duckdb/common/typedefs.hpp"
+#include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/string_type.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/vector.hpp"
@@ -10,6 +11,7 @@
 #include "sheetreader/XlsxFile.h"
 #include "sheetreader/XlsxSheet.h"
 
+#include <cmath>
 #include <string>
 #define DUCKDB_EXTENSION_MAIN
 
@@ -119,8 +121,6 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 
 	const idx_t column_count = output.ColumnCount();
 
-	// First row is discarded
-	auto discarded_val = fsheet->nextRow();
 
 	// Get the next batch of data from sheetreader
 	idx_t i = 0;
@@ -151,8 +151,8 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 					break;
 				}
 				case LogicalTypeId::DATE: {
-					auto value = row_values[j].data.real * 1000;
-					output.data[j].SetValue(i, Value(value));
+					date_t value = date_t((int)(row_values[j].data.real / 86400.0));
+					output.data[j].SetValue(i, Value::DATE(value));
 					break;
 				}
 				default:
@@ -259,7 +259,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 				break;
 			case CellType::T_DATE:
 				// TODO: Fix date type
-				column_types.push_back(LogicalType::DOUBLE);
+				column_types.push_back(LogicalType::DATE);
 				column_names.push_back("Date"+ std::to_string(column_index));
 				break;
 			default:
@@ -275,6 +275,10 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	names = column_names;
 	bind_data->names = column_names;
 
+
+	// First row is discarded
+	// TODO: Remove when not using nextRow() anymore
+	auto discarded_val = fsheet->nextRow();
 
 
 	return std::move(bind_data);
