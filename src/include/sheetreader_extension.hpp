@@ -52,7 +52,7 @@ public:
 	unique_ptr< XlsxSheet> xlsx_sheet;
 
 	// TODO: Which default value should be used?
-	idx_t number_threads=4;
+	idx_t number_threads=1;
 
 private:
 	SRScanData(ClientContext &context, vector<string> file_names, string sheet_name);

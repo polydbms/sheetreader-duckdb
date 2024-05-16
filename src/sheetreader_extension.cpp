@@ -137,7 +137,7 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 				case LogicalTypeId::VARCHAR: {
 					// TODO: Check if types align
 					auto value = xlsx_file.getString(row_values[j].data.integer) ;
-					output.data[j].SetValue(i, Value("stub"));
+					output.data[j].SetValue(i, Value(value));
 					break;
 				}
 				case LogicalTypeId::DOUBLE: {
@@ -196,15 +196,30 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			bind_data->sheet_name = StringValue::Get(kv.second);
 		} else if (loption == "i") {
 			bind_data->iterations = IntegerValue::Get(kv.second);
+		} else if (loption == "threads") {
+			bind_data->number_threads = IntegerValue::Get(kv.second);
+		} else {
+			throw BinderException("Unknown named parameter");
 		}
 	}
+
+
+	// If number threads > 1, we set parallel true
+	if (bind_data->number_threads > 1) {
+		bind_data->xlsx_file.mParallelStrings = true;
+	} else {
+		bind_data->xlsx_file.mParallelStrings = false;
+	}
+
+	bind_data->xlsx_file.parseSharedStrings();
+
 
 
 	// TODO: Make sheet number / name configurable via named parameters
 	auto &fsheet = bind_data->xlsx_sheet;
 
 	// TODO: Make this configurable (especially skipRows) + number_threads via named parameters
-	bool success = fsheet->interleaved(1, 0, 1);
+	bool success = fsheet->interleaved(1, 0, bind_data->number_threads);
 	if(!success) {
 		throw BinderException("Failed to read sheet");
 	}
@@ -273,6 +288,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 
 	sheetreader_table_function.named_parameters["sheetname"] = LogicalType::VARCHAR;
 	sheetreader_table_function.named_parameters["i"] = LogicalType::INTEGER;
+	sheetreader_table_function.named_parameters["threads"] = LogicalType::INTEGER;
 
 	ExtensionUtil::RegisterFunction(instance, sheetreader_table_function);
 }
