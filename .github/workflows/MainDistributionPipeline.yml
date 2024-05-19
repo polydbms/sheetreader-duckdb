@@ -18,6 +18,7 @@ jobs:
     with:
       duckdb_version: v0.10.2
       extension_name: sheetreader
+      exclude_archs: "windows_amd64_rtools"
 
   duckdb-stable-deploy:
     name: Deploy extension binaries (DuckDB v0.10.2)
