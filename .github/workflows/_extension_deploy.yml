@@ -61,6 +61,7 @@ on:
 jobs:
   generate_matrix:
     name: Generate matrix
+    environment: Actions
     runs-on: ubuntu-latest
     outputs:
       deploy_matrix: ${{ steps.parse-matrices.outputs.deploy_matrix }}
