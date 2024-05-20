@@ -7,6 +7,7 @@ on:
   pull_request:
   workflow_dispatch:
 
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -15,7 +16,12 @@ jobs:
   test-secrets-accessable:
     name: Test secrets accessable
     uses: ./.github/workflows/_check_secrets.yml
-    secrets: inherit
+    secrets:
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      S3_DEPLOY_ID: ${{ secrets.S3_DEPLOY_ID }}
+      S3_DEPLOY_KEY: ${{ secrets.S3_DEPLOY_KEY }}
+      S3_REGION: ${{ secrets.S3_REGION }}
+    
     
 
   duckdb-stable-build:
