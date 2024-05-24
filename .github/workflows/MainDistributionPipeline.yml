@@ -22,21 +22,21 @@ jobs:
     
 
   duckdb-stable-build:
-    name: Build extension binaries (DuckDB v0.10.2)
+    name: Build extension binaries (DuckDB v0.10.3)
     needs: test-secrets-accessable
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v0.10.2
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v0.10.3
     with:
-      duckdb_version: v0.10.2
+      duckdb_version: v0.10.3
       extension_name: sheetreader
       exclude_archs: "windows_amd64_rtools"
 
   duckdb-stable-deploy:
-    name: Deploy extension binaries (DuckDB v0.10.2)
+    name: Deploy extension binaries (DuckDB v0.10.3)
     needs: duckdb-stable-build
     uses: ./.github/workflows/_extension_deploy.yml
     secrets: inherit
     with:
-      duckdb_version: v0.10.2
+      duckdb_version: v0.10.3
       extension_name: sheetreader
       deploy_latest: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
       exclude_archs: "windows_amd64_rtools"

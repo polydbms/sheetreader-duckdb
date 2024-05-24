@@ -174,7 +174,13 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	// Get the file names from the first parameter
 	// Note: GetFileList also checks if the files exist
-	auto file_names = MultiFileReader::GetFileList(context, input.inputs[0], ".XLSX (Excel)");
+
+	// Old -- this was nice
+	// auto file_names = MultiFileReader::GetFileList(context, input.inputs[0], ".XLSX (Excel)");
+	// New (0.10.3) -- TODO: Is there a way to specify file type?
+	auto filereader = MultiFileReader::Create(input.table_function);
+	auto file_list = filereader->CreateFileList(context, input.inputs[0]);
+	auto file_names = file_list->GetAllFiles();
 
 	if (file_names.size() == 0) {
 		throw BinderException("No files found in path");
