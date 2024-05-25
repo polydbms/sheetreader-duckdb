@@ -1,6 +1,6 @@
-# Sheetreader
+# Sheetreader DuckDB extension
 
-This extension, Sheetreader, allows you to read .XLSX files by using https://github.com/polydbms/sheetreader-core.
+This DuckDB extension, Sheetreader, allows you to read .XLSX files by using https://github.com/polydbms/sheetreader-core.
 
 ---
 
