@@ -4,10 +4,12 @@
 #include "duckdb.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/unique_ptr.hpp"
+#include "duckdb/common/vector.hpp"
 #include "duckdb/function/function.hpp"
-
 #include "sheetreader/XlsxFile.h"
 #include "sheetreader/XlsxSheet.h"
+
+#include <chrono>
 
 namespace duckdb {
 
@@ -40,8 +42,8 @@ public:
 	string sheet_name;
 
 	//! For testing purposes
-	idx_t iterations=1;
-	
+	idx_t version = 0;
+
 	//! All column names (in order)
 	vector<string> names;
 
@@ -49,25 +51,43 @@ public:
 	vector<LogicalType> types;
 
 	XlsxFile xlsx_file;
-	unique_ptr< XlsxSheet> xlsx_sheet;
+	unique_ptr<XlsxSheet> xlsx_sheet;
 
 	// TODO: Which default value should be used?
-	idx_t number_threads=1;
+	idx_t number_threads = 1;
+
+	idx_t flag = 0;
+
+	std::chrono::time_point<std::chrono::high_resolution_clock> start_time_parsing;
+	std::chrono::time_point<std::chrono::high_resolution_clock> finish_time_parsing;
 
 private:
 	SRScanData(ClientContext &context, vector<string> file_names, string sheet_name);
-
 };
 struct SRScanGlobalState {
 public:
 	SRScanGlobalState(ClientContext &context, const SRScanData &bind_data);
 
 public:
+
 	//! Bound data
 	const SRScanData &bind_data;
 
 	//! Number of reads so far
-	idx_t chunk_count;
+	idx_t chunk_count = 0;
+
+	std::chrono::time_point<std::chrono::high_resolution_clock> start_time_copy;
+	std::chrono::time_point<std::chrono::high_resolution_clock> finish_time_copy;
+	vector<double> times_copy = {};
+
+	//! State of copying from mCells
+	size_t maxBuffers;
+	size_t currentBuffer;
+	size_t currentThread;
+	size_t currentCell;
+	unsigned long currentColumn;
+	long long currentRow;
+	std::vector<size_t> currentLocs;
 };
 
 struct SRScanLocalState {
@@ -76,7 +96,7 @@ public:
 
 public:
 	//! Get next batch of data and return number of rows gathered
-  idx_t ReadNextBatch(SRScanGlobalState &gstate);
+	idx_t ReadNextBatch(SRScanGlobalState &gstate);
 	void GetNextBatchFromSR(SRScanGlobalState &gstate);
 
 public:
