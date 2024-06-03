@@ -396,7 +396,7 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 							++loop_executions;
 
 							if (CheckRowLimitReached(gstate)) {
-								return GetCardinality(gstate);
+								return (GetCardinality(gstate) - 1);
 							}
 						}
 					}
@@ -418,7 +418,7 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 					const XlsxCell &cell = cells[gstate.currentCell];
 					long long mSkipRows = fsheet->mSkipRows;
 					long long adjustedRow = gstate.currentRow - mSkipRows - row_offset;
-					std::cout << "Row: " << gstate.currentRow << " Adjusted Column: " << currentColumn << std::endl;
+					std::cout << "Row: " << adjustedRow << " Adjusted Column: " << currentColumn << std::endl;
 					SetCell(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
 					++gstate.currentColumn;
 				}
