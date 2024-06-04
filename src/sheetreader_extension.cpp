@@ -128,7 +128,8 @@ union DataPtr {
 
 // TODO: import chrono
 inline void FinishChunk(DataChunk &output, idx_t cardinality, SRScanGlobalState &gstate,
-                        std::chrono::time_point<std::chrono::high_resolution_clock> start_time_copy_chunk) {
+                        std::chrono::time_point<std::chrono::high_resolution_clock> start_time_copy_chunk,
+                        bool print_time = false) {
 	// Set the validity of the output chunk
 	// TODO: What do we get with this?
 	// for (idx_t col = 0; col < output.ColumnCount(); col++) {
@@ -138,14 +139,15 @@ inline void FinishChunk(DataChunk &output, idx_t cardinality, SRScanGlobalState 
 	// }
 	output.SetCardinality(cardinality);
 
-	auto finish_time_copy_chunk = std::chrono::system_clock::now();
+	std::chrono::time_point<std::chrono::high_resolution_clock> finish_time_copy_chunk =
+	    std::chrono::system_clock::now();
 	std::chrono::duration<double> elapsed_seconds_chunk = finish_time_copy_chunk - start_time_copy_chunk;
 	gstate.times_copy.push_back(elapsed_seconds_chunk.count());
 
-	if (cardinality == 0) {
+	if (cardinality == 0 && print_time) {
 		gstate.finish_time_copy = std::chrono::system_clock::now();
 		std::chrono::duration<double> elapsed_seconds = gstate.finish_time_copy - gstate.start_time_copy;
-		std::cout << "Copy time: " << elapsed_seconds.count() << "s" << std::endl;
+			std::cout << "Copy time: " << elapsed_seconds.count() << "s" << std::endl;
 
 		double sum = 0;
 		for (auto &time : gstate.times_copy) {
@@ -307,14 +309,9 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 				//
 				// This means that the values won't be updated if there is no location info for the current cell
 				// (e.g. not first cell in row)
-				// TODO: Find out when this is executed > 1 times
-				size_t loop_executions = 0;
-				bool complex = bind_data.flag == 1;
+				// Loop is executed 2 times for first location info, since it's empty
 				while (currentLoc < locs_infos.size() && locs_infos[currentLoc].buffer == gstate.currentBuffer &&
 				       locs_infos[currentLoc].cell == gstate.currentCell) {
-					if (loop_executions >= 1) {
-						std::cout << "Loop executed " << loop_executions << " times" << std::endl;
-					}
 
 					gstate.currentColumn = locs_infos[currentLoc].column;
 					if (locs_infos[currentLoc].row == -1ul) {
@@ -324,7 +321,6 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 					}
 					// Increment for next iteration
 					++currentLoc;
-					++loop_executions;
 
 					if (CheckRowLimitReached(gstate)) {
 						return (GetCardinality(gstate) - 1);
@@ -474,7 +470,7 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 			}
 		}
 
-		FinishChunk(output, i, gstate, start_time_copy_chunk);
+		FinishChunk(output, i, gstate, start_time_copy_chunk, bind_data.flag == 1);
 
 		return;
 
@@ -614,7 +610,7 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 
 		auto cardinality = UnsafeCopy(gstate, bind_data, output, flat_vectors);
 
-		FinishChunk(output, cardinality, gstate, start_time_copy_chunk);
+		FinishChunk(output, cardinality, gstate, start_time_copy_chunk, bind_data.flag == 1);
 
 		return;
 	}
@@ -685,7 +681,9 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	auto end = std::chrono::system_clock::now();
 	std::chrono::duration<double> elapsed_seconds = end - start;
-	std::cout << "Parsing time time: " << elapsed_seconds.count() << "s" << std::endl;
+	if (bind_data->flag == 1) {
+		std::cout << "Parsing time time: " << elapsed_seconds.count() << "s" << std::endl;
+	}
 
 	auto number_column = fsheet->mDimension.first;
 	auto number_rows = fsheet->mDimension.second;
