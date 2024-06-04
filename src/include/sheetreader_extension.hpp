@@ -42,7 +42,7 @@ public:
 	string sheet_name;
 
 	//! For testing purposes
-	idx_t version = 0;
+	idx_t version = 3;
 
 	//! All column names (in order)
 	vector<string> names;

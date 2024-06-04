@@ -127,7 +127,7 @@ union DataPtr {
 };
 
 // TODO: import chrono
-inline void FinishChunk(DataChunk &output, idx_t current_chunk_row, SRScanGlobalState &gstate,
+inline void FinishChunk(DataChunk &output, idx_t cardinality, SRScanGlobalState &gstate,
                         std::chrono::time_point<std::chrono::high_resolution_clock> start_time_copy_chunk) {
 	// Set the validity of the output chunk
 	// TODO: What do we get with this?
@@ -136,13 +136,13 @@ inline void FinishChunk(DataChunk &output, idx_t current_chunk_row, SRScanGlobal
 	//
 	// 	vec.Verify(scan_count);
 	// }
-	output.SetCardinality(current_chunk_row);
+	output.SetCardinality(cardinality);
 
 	auto finish_time_copy_chunk = std::chrono::system_clock::now();
 	std::chrono::duration<double> elapsed_seconds_chunk = finish_time_copy_chunk - start_time_copy_chunk;
 	gstate.times_copy.push_back(elapsed_seconds_chunk.count());
 
-	if (current_chunk_row == 0) {
+	if (cardinality == 0) {
 		gstate.finish_time_copy = std::chrono::system_clock::now();
 		std::chrono::duration<double> elapsed_seconds = gstate.finish_time_copy - gstate.start_time_copy;
 		std::cout << "Copy time: " << elapsed_seconds.count() << "s" << std::endl;
@@ -275,157 +275,87 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 		gstate.currentLocs = std::vector<size_t>(number_threads, 0);
 	}
 
-	// while (CheckRowLimitReached(gstate)) {
-	// 	bool get_next_row = false;
-		// vector<XlsxCell> currentRowData;
-		// currentRowData.resize(fsheet->mDimension.first - fsheet->mSkipColumns, XlsxCell());
+	//! To get the correct order of rows we iterate for(buffer_index) { for(thread_index) { ... } }
+	//! This is due to how sheetreader-core writes the data to the buffers (stored in mCells)
+	for (; gstate.currentBuffer < gstate.maxBuffers; ++gstate.currentBuffer) {
+		for (; gstate.currentThread < fsheet->mCells.size(); ++gstate.currentThread) {
 
-		//! To get the correct order of rows we iterate for(buffer_index) { for(thread_index) { ... } }
-		//! This is due to how sheetreader-core writes the data to the buffers (stored in mCells)
-		for (; gstate.currentBuffer < gstate.maxBuffers; ++gstate.currentBuffer) {
-			// if (get_next_row) {
-			// 	break;
-			// }
-			for (; gstate.currentThread < fsheet->mCells.size(); ++gstate.currentThread) {
+			// If there are no more buffers to read, return last row and prepare for finishing copy
+			if (fsheet->mCells[gstate.currentThread].size() == 0) {
+				// Set to maxBuffers, so this is the last iteration
+				gstate.currentBuffer = gstate.maxBuffers;
+
+				return GetCardinality(gstate);
+			}
+
+			//! Get current cell buffer
+			const std::vector<XlsxCell> cells = fsheet->mCells[gstate.currentThread].front();
+			//! Location info for current thread
+			const std::vector<LocationInfo> &locs_infos = fsheet->mLocationInfos[gstate.currentThread];
+			//! Current location index
+			size_t &currentLoc = gstate.currentLocs[gstate.currentThread];
+
+			// TODO: Check when this is the case
+			// currentCell <= cells.size() because there might be location info after last cell
+			for (; gstate.currentCell <= cells.size(); ++gstate.currentCell) {
 				// if (get_next_row) {
 				// 	break;
 				// }
 
-				// If there are no more buffers to read, return last row and prepare for finishing copy
-				if (fsheet->mCells[gstate.currentThread].size() == 0) {
-					// Set to maxBuffers, so this is the last iteration
-					gstate.currentBuffer = gstate.maxBuffers;
+				// Update currentRow & currentColumn when location info is available for current cell at currentLoc
+				// After setting those values: Advance to next location info
+				//
+				// This means that the values won't be updated if there is no location info for the current cell
+				// (e.g. not first cell in row)
+				// TODO: Find out when this is executed > 1 times
+				size_t loop_executions = 0;
+				bool complex = bind_data.flag == 1;
+				while (currentLoc < locs_infos.size() && locs_infos[currentLoc].buffer == gstate.currentBuffer &&
+				       locs_infos[currentLoc].cell == gstate.currentCell) {
+					if (loop_executions >= 1) {
+						std::cout << "Loop executed " << loop_executions << " times" << std::endl;
+					}
 
-					// SetRow(bind_data, output, flat_vectors, currentRowData, gstate.currentRow - row_offset);
-
-					// TODO: Is this needed? Since we are finished anyway
-					// gstate.currentRow = 0;
-					return GetCardinality(gstate);
-				}
-
-				//! Get current cell buffer
-				const std::vector<XlsxCell> cells = fsheet->mCells[gstate.currentThread].front();
-				//! Location info for current thread
-				const std::vector<LocationInfo> &locs_infos = fsheet->mLocationInfos[gstate.currentThread];
-				//! Current location index
-				size_t &currentLoc = gstate.currentLocs[gstate.currentThread];
-
-				// TODO: Check when this is the case
-				// currentCell <= cells.size() because there might be location info after last cell
-				for (; gstate.currentCell <= cells.size(); ++gstate.currentCell) {
-					// if (get_next_row) {
-					// 	break;
-					// }
-
-					// Update currentRow & currentColumn when location info is available for current cell at currentLoc
-					// After setting those values: Advance to next location info
-					//
-					// This means that the values won't be updated if there is no location info for the current cell
-					// (e.g. not first cell in row)
-					// TODO: Find out when this is executed > 1 times
-					size_t loop_executions = 0;
-					bool complex = bind_data.flag == 1;
-					if (complex) {
-						while (currentLoc < locs_infos.size() &&
-						       locs_infos[currentLoc].buffer == gstate.currentBuffer &&
-						       locs_infos[currentLoc].cell == gstate.currentCell) {
-							// if (get_next_row) {
-							// 	break;
-							// }
-
-							if (loop_executions > 1) {
-								std::cout << "Loop executed " << loop_executions << " times" << std::endl;
-							}
-
-							gstate.currentColumn = locs_infos[currentLoc].column;
-
-							// TODO: Test if this ever happens
-							if (locs_infos[currentLoc].row == -1ul) {
-								++gstate.currentRow;
-								++currentLoc;
-								std::cout << "The unthinkable happened in row: " << gstate.currentRow << std::endl;
-								if (gstate.currentRow > 0) {
-									// SetRow(bind_data, output, flat_vectors, currentRowData,
-									//        gstate.currentRow - row_offset - 1);
-									// get_next_row = true;
-									continue;
-								}
-								// Next location info is for a different row then the last one
-							} else if (static_cast<long long>(locs_infos[currentLoc].row) > gstate.currentRow) {
-								const long long nextRow = static_cast<long long>(locs_infos[currentLoc].row);
-								// This is in general only the case, when the next row is in a different thread
-								// So we don't update currentLoc, since it's the position in the current thread
-								if (nextRow > gstate.currentRow + 1) {
-									++gstate.currentRow;
-								} else {
-									gstate.currentRow = nextRow;
-									++currentLoc;
-								}
-								// TODO: Is this > instead of >= because first location has no content?
-								if (gstate.currentRow > 0) {
-									// SetRow(bind_data, output, flat_vectors, currentRowData,
-									//        gstate.currentRow - row_offset - 1);
-									// Check if we have enough rows
-									// get_next_row = true;
-									continue;
-								}
-								// This is the case when nextRow == currentRow
-								// In general this happens when half of the row is in one thread and the other halve in
-								// another
-							} else {
-								++currentLoc;
-							}
-							loop_executions++;
-						}
+					gstate.currentColumn = locs_infos[currentLoc].column;
+					if (locs_infos[currentLoc].row == -1ul) {
+						++gstate.currentRow;
 					} else {
-						while (currentLoc < locs_infos.size() &&
-						       locs_infos[currentLoc].buffer == gstate.currentBuffer &&
-						       locs_infos[currentLoc].cell == gstate.currentCell) {
-							if (loop_executions >= 1) {
-								std::cout << "Loop executed " << loop_executions << " times" << std::endl;
-							}
-
-							gstate.currentColumn = locs_infos[currentLoc].column;
-							if (locs_infos[currentLoc].row == -1ul) {
-								++gstate.currentRow;
-							} else {
-								gstate.currentRow = locs_infos[currentLoc].row;
-							}
-							// Increment for next iteration
-							++currentLoc;
-							++loop_executions;
-
-							if (CheckRowLimitReached(gstate)) {
-								return (GetCardinality(gstate) - 1);
-							}
-						}
+						gstate.currentRow = locs_infos[currentLoc].row;
 					}
-					// TODO: I think this can never be the case, since currentCell is not modified after loop check
-					if (gstate.currentCell >= cells.size())
-						break;
-					const auto currentColumn = gstate.currentColumn;
-					// If this cell is in a column that was not present in the first row, we throw an error
-					// TODO: Can we resize the columns after bind?
-					// TODO: make columns user definable via named parameter
-					if (currentColumn >= bind_data.types.size()) {
-						// throw InvalidInputException("Row " + std::to_string(gstate.currentRow) +
-						//                             "has more columns than the first row: " +
-						//                             std::to_string(currentColumn + 1));
-						// currentRowData.resize(fsheet->mDimension.first - fsheet->mSkipColumns, XlsxCell());
-						std::cout << "Row " << gstate.currentRow
-						          << " has more columns than the first row: " << currentColumn + 1 << std::endl;
+					// Increment for next iteration
+					++currentLoc;
+					++loop_executions;
+
+					if (CheckRowLimitReached(gstate)) {
+						return (GetCardinality(gstate) - 1);
 					}
-					const XlsxCell &cell = cells[gstate.currentCell];
-					long long mSkipRows = fsheet->mSkipRows;
-					long long adjustedRow = gstate.currentRow - mSkipRows - row_offset;
-					std::cout << "Row: " << adjustedRow << " Adjusted Column: " << currentColumn << std::endl;
-					SetCell(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
-					++gstate.currentColumn;
 				}
-				fsheet->mCells[gstate.currentThread].pop_front();
-				gstate.currentCell = 0;
+				// TODO: I think this can never be the case, since currentCell is not modified after loop check
+				if (gstate.currentCell >= cells.size())
+					break;
+				const auto currentColumn = gstate.currentColumn;
+				// If this cell is in a column that was not present in the first row, we throw an error
+				// TODO: Can we resize the columns after bind?
+				// TODO: make columns user definable via named parameter
+				if (currentColumn >= bind_data.types.size()) {
+					// throw InvalidInputException("Row " + std::to_string(gstate.currentRow) +
+					//                             "has more columns than the first row: " +
+					//                             std::to_string(currentColumn + 1));
+					// currentRowData.resize(fsheet->mDimension.first - fsheet->mSkipColumns, XlsxCell());
+					std::cout << "Row " << gstate.currentRow
+					          << " has more columns than the first row: " << currentColumn + 1 << std::endl;
+				}
+				const XlsxCell &cell = cells[gstate.currentCell];
+				long long mSkipRows = fsheet->mSkipRows;
+				long long adjustedRow = gstate.currentRow - mSkipRows - row_offset;
+				// std::cout << "Row: " << adjustedRow << " Adjusted Column: " << currentColumn << std::endl;
+				SetCell(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
+				++gstate.currentColumn;
 			}
-			gstate.currentThread = 0;
+			fsheet->mCells[gstate.currentThread].pop_front();
+			gstate.currentCell = 0;
+		}
+		gstate.currentThread = 0;
 		// }
 
 		// TODO: is there a case where currentRowData is not empty?
