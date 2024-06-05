@@ -28,7 +28,7 @@ db = new duckdb.Database(':memory:', {"allow_unsigned_extensions": "true"});
 Get the extension from S3 (platform is either `linux_amd64`, `linux_amd64_gcc4`, `linux_arm64`, `osx_arm64`, `osx_amd64`, `windows_amd64`, `wasm_eh`, `wasm_mvp`, `wasm_threads`):
 
 ```
-wget https://duckdb-sheetreader-extension.s3.eu-central-1.amazonaws.com/v0.10.3/<platform>/sheetreader.duckdb_extension.gz
+wget https://duckdb-sheetreader-extension.s3.eu-central-1.amazonaws.com/v1.0.0/<platform>/sheetreader.duckdb_extension.gz
 ```
 
 
