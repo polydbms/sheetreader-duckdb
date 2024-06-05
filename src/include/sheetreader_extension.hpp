@@ -58,8 +58,8 @@ public:
 
 	idx_t flag = 0;
 
-	std::chrono::time_point<std::chrono::high_resolution_clock> start_time_parsing;
-	std::chrono::time_point<std::chrono::high_resolution_clock> finish_time_parsing;
+	std::chrono::time_point<std::chrono::system_clock> start_time_parsing;
+	std::chrono::time_point<std::chrono::system_clock> finish_time_parsing;
 
 private:
 	SRScanData(ClientContext &context, vector<string> file_names, string sheet_name);
@@ -76,8 +76,8 @@ public:
 	//! Number of reads so far
 	idx_t chunk_count = 0;
 
-	std::chrono::time_point<std::chrono::high_resolution_clock> start_time_copy;
-	std::chrono::time_point<std::chrono::high_resolution_clock> finish_time_copy;
+	std::chrono::time_point<std::chrono::system_clock> start_time_copy;
+	std::chrono::time_point<std::chrono::system_clock> finish_time_copy;
 	vector<double> times_copy = {};
 
 	//! State of copying from mCells

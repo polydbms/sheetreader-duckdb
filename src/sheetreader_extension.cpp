@@ -16,6 +16,7 @@
 #include "sheetreader/XlsxFile.h"
 #include "sheetreader/XlsxSheet.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <iostream>
@@ -128,7 +129,7 @@ union DataPtr {
 
 // TODO: import chrono
 inline void FinishChunk(DataChunk &output, idx_t cardinality, SRScanGlobalState &gstate,
-                        std::chrono::time_point<std::chrono::high_resolution_clock> start_time_copy_chunk,
+                        std::chrono::time_point<std::chrono::system_clock> start_time_copy_chunk,
                         bool print_time = false) {
 	// Set the validity of the output chunk
 	// TODO: What do we get with this?
@@ -139,7 +140,7 @@ inline void FinishChunk(DataChunk &output, idx_t cardinality, SRScanGlobalState 
 	// }
 	output.SetCardinality(cardinality);
 
-	std::chrono::time_point<std::chrono::high_resolution_clock> finish_time_copy_chunk =
+	std::chrono::time_point<std::chrono::system_clock> finish_time_copy_chunk =
 	    std::chrono::system_clock::now();
 	std::chrono::duration<double> elapsed_seconds_chunk = finish_time_copy_chunk - start_time_copy_chunk;
 	gstate.times_copy.push_back(elapsed_seconds_chunk.count());
