@@ -23,7 +23,15 @@ public:
 // TODO: Or should this renamed to SRReadData as in ReadCSVData?
 struct SRScanData : public TableFunctionData {
 public:
+	//! File name with path to file
+	//! Sheet ID default is 1
 	SRScanData(string file_name);
+	//! File name with path to file and name of sheet
+	//! Throws exception if sheet name is not found
+	SRScanData(string file_name, string sheet_name);
+	//! File name with path to file and index of sheet (starts with 1)
+	//! Throws exception if sheet at index is not found
+	SRScanData(string file_name, int sheet_index);
 
 	// void Bind(ClientContext &context, TableFunctionBindInput &input);
 
@@ -37,9 +45,6 @@ public:
 public:
 	//! The paths of the files we're reading
 	vector<string> file_names;
-
-	//! Name of the sheet to read
-	string sheet_name;
 
 	//! For testing purposes
 	idx_t version = 3;
@@ -55,6 +60,9 @@ public:
 
 	// TODO: Which default value should be used?
 	idx_t number_threads = 1;
+
+	// TODO: Which default value should be used?
+	idx_t skip_rows = 0;
 
 	idx_t flag = 0;
 

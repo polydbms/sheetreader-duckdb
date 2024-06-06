@@ -40,16 +40,24 @@ namespace duckdb {
 // TODO: Fix default constructor
 SRScanData::SRScanData(string file_name)
     : xlsx_file(file_name), xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(1))) {
-	//, xlsx_file(make_uniq<XlsxFile>(file_name))
 }
 
-SRScanData::SRScanData(ClientContext &context, vector<string> file_names, string sheet_name)
-    : file_names(std::move(file_names)), sheet_name(std::move(sheet_name)), xlsx_file(file_names[0]),
-      xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(1))) {
-	//, xlsx_file(make_uniq<XlsxFile>(file_names[0]))
-	// InitializeReaders(context);
-	// InitializeFormats();
+SRScanData::SRScanData(string file_name, string sheet_name)
+    : xlsx_file(file_name), xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(sheet_name))) {
 }
+
+SRScanData::SRScanData(string file_name, int sheet_index)
+    : xlsx_file(file_name), xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(sheet_index))) {
+}
+
+// TODO: Is this still needed?
+// SRScanData::SRScanData(ClientContext &context, vector<string> file_names, string sheet_name)
+//     : file_names(std::move(file_names)), xlsx_file(file_names[0]),
+//       xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(1))) {
+// 	//, xlsx_file(make_uniq<XlsxFile>(file_names[0]))
+// 	// InitializeReaders(context);
+// 	// InitializeFormats();
+// }
 
 SRScanGlobalState::SRScanGlobalState(ClientContext &context, const SRScanData &bind_data)
     : bind_data(bind_data), chunk_count(0) {
@@ -140,15 +148,14 @@ inline void FinishChunk(DataChunk &output, idx_t cardinality, SRScanGlobalState 
 	// }
 	output.SetCardinality(cardinality);
 
-	std::chrono::time_point<std::chrono::system_clock> finish_time_copy_chunk =
-	    std::chrono::system_clock::now();
+	std::chrono::time_point<std::chrono::system_clock> finish_time_copy_chunk = std::chrono::system_clock::now();
 	std::chrono::duration<double> elapsed_seconds_chunk = finish_time_copy_chunk - start_time_copy_chunk;
 	gstate.times_copy.push_back(elapsed_seconds_chunk.count());
 
 	if (cardinality == 0 && print_time) {
 		gstate.finish_time_copy = std::chrono::system_clock::now();
 		std::chrono::duration<double> elapsed_seconds = gstate.finish_time_copy - gstate.start_time_copy;
-			std::cout << "Copy time: " << elapsed_seconds.count() << "s" << std::endl;
+		std::cout << "Copy time: " << elapsed_seconds.count() << "s" << std::endl;
 
 		double sum = 0;
 		for (auto &time : gstate.times_copy) {
@@ -637,7 +644,40 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		throw BinderException("Only one file can be read at a time");
 	}
 
-	auto bind_data = make_uniq<SRScanData>(file_names[0]);
+	string sheet_name;
+	int sheet_index;
+	bool sheet_index_set = false;
+
+	for (auto &kv : input.named_parameters) {
+		auto loption = StringUtil::Lower(kv.first);
+		if (loption == "sheet_name") {
+			sheet_name = StringValue::Get(kv.second);
+		} else if (loption == "sheet_index") {
+			sheet_index = IntegerValue::Get(kv.second);
+			sheet_index_set = true;
+		} else {
+			continue;
+		}
+	}
+
+	if (!sheet_name.empty() && sheet_index_set) {
+		throw BinderException("Sheet index & sheet name cannot be set at the same time.");
+	}
+
+	// Create the bind data object and return it
+	unique_ptr<duckdb::SRScanData> bind_data;
+
+	try {
+		if (!sheet_name.empty()) {
+			bind_data = make_uniq<SRScanData>(file_names[0], sheet_name);
+		} else if (sheet_index_set) {
+			bind_data = make_uniq<SRScanData>(file_names[0], sheet_index);
+		} else {
+			bind_data = make_uniq<SRScanData>(file_names[0]);
+		}
+	} catch (std::exception &e) {
+		throw BinderException(e.what());
+	}
 
 	// TODO: Do we need any information from info?
 	// TableFunctionInfo *info = input.info.get();
@@ -645,14 +685,19 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	// Here we could handle any named parameters
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
-		if (loption == "sheetname") {
-			bind_data->sheet_name = StringValue::Get(kv.second);
-		} else if (loption == "version") {
+		if (loption == "version") {
 			bind_data->version = IntegerValue::Get(kv.second);
 		} else if (loption == "threads") {
+			// TODO: Verfiy > 0
 			bind_data->number_threads = IntegerValue::Get(kv.second);
 		} else if (loption == "flag") {
 			bind_data->flag = IntegerValue::Get(kv.second);
+		} else if (loption == "skip_rows") {
+			// TODO: Verfiy > 0
+			// Default: 0
+			bind_data->skip_rows = IntegerValue::Get(kv.second);
+		} else if (loption == "sheet_name" || loption == "sheet_index") {
+			continue;
 		} else {
 			throw BinderException("Unknown named parameter");
 		}
@@ -669,11 +714,10 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	bind_data->xlsx_file.parseSharedStrings();
 
-	// TODO: Make sheet number / name configurable via named parameters
 	auto &fsheet = bind_data->xlsx_sheet;
 
-	// TODO: Make this configurable (especially skipRows) + number_threads via named parameters
-	bool success = fsheet->interleaved(1, 0, bind_data->number_threads);
+
+	bool success = fsheet->interleaved(bind_data->skip_rows, 0, bind_data->number_threads);
 	if (!success) {
 		throw BinderException("Failed to read sheet");
 	}
@@ -734,6 +778,12 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		column_index++;
 	}
 
+	// TODO: Check whether all columns string
+	// If so: Could be name of columns
+	// Check: If next row also all string
+	// if not -> use first row as column names & second row as types
+	// TODO: Make this the default behavior if named parameter `has_header` is set to true
+
 	return_types = column_types;
 	bind_data->types = column_types;
 	// TODO: Extract column names from sheet or named parameters or use default names
@@ -753,10 +803,12 @@ static void LoadInternal(DatabaseInstance &instance) {
 	                                         SheetreaderBindFun, SRGlobalTableFunctionState::Init,
 	                                         SRLocalTableFunctionState::Init);
 
-	sheetreader_table_function.named_parameters["sheetname"] = LogicalType::VARCHAR;
+	sheetreader_table_function.named_parameters["sheet_name"] = LogicalType::VARCHAR;
+	sheetreader_table_function.named_parameters["sheet_index"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["version"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["threads"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["flag"] = LogicalType::INTEGER;
+	sheetreader_table_function.named_parameters["skip_rows"] = LogicalType::INTEGER;
 
 	ExtensionUtil::RegisterFunction(instance, sheetreader_table_function);
 }
