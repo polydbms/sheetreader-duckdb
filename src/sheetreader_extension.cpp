@@ -624,6 +624,71 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 	}
 }
 
+inline bool ConvertCellTypes(vector<LogicalType> &column_types, vector<string> &column_names,
+                             vector<CellType> &colTypesByIndex) {
+	idx_t column_index = 0;
+	bool first_row_all_string = true;
+	for (auto &colType : colTypesByIndex) {
+		switch (colType) {
+		case CellType::T_STRING_REF:
+			column_types.push_back(LogicalType::VARCHAR);
+			column_names.push_back("String" + std::to_string(column_index));
+			break;
+		case CellType::T_STRING:
+		case CellType::T_STRING_INLINE:
+			// TODO
+			throw BinderException("Inline & dynamic String types not supported yet");
+			break;
+		case CellType::T_NUMERIC:
+			column_types.push_back(LogicalType::DOUBLE);
+			column_names.push_back("Numeric" + std::to_string(column_index));
+			first_row_all_string = false;
+			break;
+		case CellType::T_BOOLEAN:
+			column_types.push_back(LogicalType::BOOLEAN);
+			column_names.push_back("Boolean" + std::to_string(column_index));
+			first_row_all_string = false;
+			break;
+		case CellType::T_DATE:
+			// TODO: Fix date type
+			column_types.push_back(LogicalType::DATE);
+			column_names.push_back("Date" + std::to_string(column_index));
+			first_row_all_string = false;
+			break;
+		default:
+			// TODO: Add specific column or data type
+			throw BinderException("Unknown cell type in column in column " + std::to_string(column_index));
+		}
+		column_index++;
+	}
+	return first_row_all_string;
+}
+
+inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRScanData &bind_data) {
+
+	vector<string> column_names;
+
+	for (idx_t j = 0; j < row.size(); j++) {
+		switch (row[j].type) {
+		case CellType::T_STRING_REF: {
+			auto value = bind_data.xlsx_file.getString(row[j].data.integer);
+			column_names.push_back(value);
+			break;
+		}
+		case CellType::T_STRING:
+		case CellType::T_STRING_INLINE: {
+			// TODO
+			throw BinderException("Inline & dynamic String types not supported yet");
+			break;
+		}
+		default:
+			throw BinderException("Header row contains non-string values");
+		}
+	}
+
+	return column_names;
+}
+
 inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 
@@ -716,6 +781,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	auto &fsheet = bind_data->xlsx_sheet;
 
+	// TODO: Check in Clion what happens when mHeaders is set true
 
 	bool success = fsheet->interleaved(bind_data->skip_rows, 0, bind_data->number_threads);
 	if (!success) {
@@ -730,52 +796,72 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		std::cout << "Parsing time time: " << elapsed_seconds.count() << "s" << std::endl;
 	}
 
-	auto number_column = fsheet->mDimension.first;
+	auto number_columns = fsheet->mDimension.first;
 	auto number_rows = fsheet->mDimension.second;
 
-	vector<CellType> colTypesByIndex;
+	if (number_columns == 0 || number_rows == 0) {
+		throw BinderException("Sheet appears to be empty");
+	}
+
+	vector<CellType> colTypesByIndex_first_row;
+	vector<CellType> colTypesByIndex_second_row;
 	// Get types of columns
 	// TODO: This can fail if
 	// 1. The first row is empty
 	// 2. The first fow contains column names
 	// 3. number_columns < threads
-	for (idx_t i = 0; i < number_column; i++) {
-		colTypesByIndex.push_back(fsheet->mCells[0].front()[i].type);
+	auto first_buffer = &fsheet->mCells[0].front();
+
+	// Probing the first two rows to get the types
+	if (first_buffer->size() < number_columns * 2) {
+		throw BinderException("Internal SheetReader error: Number of columns in first buffer is less than expected");
+	}
+
+	for (idx_t i = 0; i < number_columns; i++) {
+		colTypesByIndex_first_row.push_back(fsheet->mCells[0].front()[i].type);
+	}
+
+	for (idx_t i = number_columns; i < number_columns * 2; i++) {
+		colTypesByIndex_second_row.push_back(fsheet->mCells[0].front()[i].type);
 	}
 
 	// Convert CellType to LogicalType
-	vector<LogicalType> column_types;
-	vector<string> column_names;
+	vector<LogicalType> column_types_first_row;
+	vector<string> column_names_first_row;
 	idx_t column_index = 0;
-	for (auto &colType : colTypesByIndex) {
-		switch (colType) {
-		case CellType::T_STRING_REF:
-			column_types.push_back(LogicalType::VARCHAR);
-			column_names.push_back("String" + std::to_string(column_index));
-			break;
-		case CellType::T_STRING:
-		case CellType::T_STRING_INLINE:
-			// TODO
-			throw BinderException("Inline & dynamic String types not supported yet");
-			break;
-		case CellType::T_NUMERIC:
-			column_types.push_back(LogicalType::DOUBLE);
-			column_names.push_back("Numeric" + std::to_string(column_index));
-			break;
-		case CellType::T_BOOLEAN:
-			column_types.push_back(LogicalType::BOOLEAN);
-			column_names.push_back("Boolean" + std::to_string(column_index));
-			break;
-		case CellType::T_DATE:
-			// TODO: Fix date type
-			column_types.push_back(LogicalType::DATE);
-			column_names.push_back("Date" + std::to_string(column_index));
-			break;
-		default:
-			// TODO: Add specific column or data type
-			throw BinderException("Unknown cell type in column in column " + std::to_string(column_index));
+
+	bool first_row_all_string =
+	    ConvertCellTypes(column_types_first_row, column_names_first_row, colTypesByIndex_first_row);
+
+	vector<LogicalType> column_types_second_row;
+	vector<string> column_names_second_row;
+	bool has_headers = false;
+
+	if (number_rows > 1) {
+		bool second_row_all_string =
+		    ConvertCellTypes(column_types_second_row, column_names_second_row, colTypesByIndex_second_row);
+
+		if (first_row_all_string && !second_row_all_string) {
+			has_headers = true;
+
+			return_types = column_types_second_row;
+			bind_data->types = column_types_second_row;
+
+			names = column_names_first_row;
+			bind_data->names = column_names_first_row;
+		} else {
+			return_types = column_types_first_row;
+			bind_data->types = column_types_first_row;
+
+			names = column_names_first_row;
+			bind_data->names = column_names_first_row;
 		}
-		column_index++;
+	}
+
+	if (has_headers) {
+		bind_data->skip_rows++;
+		// TODO: Check whether this is correct
+		bind_data->xlsx_sheet->mSkipRows++;
 	}
 
 	// TODO: Check whether all columns string
@@ -784,11 +870,11 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	// if not -> use first row as column names & second row as types
 	// TODO: Make this the default behavior if named parameter `has_header` is set to true
 
-	return_types = column_types;
-	bind_data->types = column_types;
+	return_types = column_types_first_row;
+	bind_data->types = column_types_first_row;
 	// TODO: Extract column names from sheet or named parameters or use default names
-	names = column_names;
-	bind_data->names = column_names;
+	names = column_names_first_row;
+	bind_data->names = column_names_first_row;
 
 	// First row is discarded
 	// TODO: Remove when not using nextRow() anymore
