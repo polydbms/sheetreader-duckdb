@@ -209,6 +209,15 @@ inline void SetNull(const SRScanData &bind_data, DataChunk &output, vector<DataP
 	LogicalType expected_type = bind_data.types[column_id];
 	output.data[column_id].SetValue(row_id, Value(expected_type));
 }
+
+inline void SetAllInvalid(DataChunk &output, idx_t cardinality) {
+	for (idx_t col = 0; col < output.ColumnCount(); col++) {
+		Vector &vec = output.data[col];
+		auto &validity = FlatVector::Validity(vec);
+		validity.SetAllInvalid(cardinality);
+	}
+}
+
 inline void SetCell(const SRScanData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors, const XlsxCell &cell,
                     idx_t row_id, idx_t column_id) {
 
@@ -216,7 +225,10 @@ inline void SetCell(const SRScanData &bind_data, DataChunk &output, vector<DataP
 
 	// TODO: [IMPORTANT] Check whether cell is null and maybe if compatible with column type
 
-	// TODO: Maybe set validity mask
+	// TODO: Maybe get validity masks with flat_vectors, so we don't have to get it here for every cell
+	Vector &vec = output.data[column_id];
+	auto &validity = FlatVector::Validity(vec);
+	validity.SetValid(row_id);
 
 	switch (bind_data.types[column_id].id()) {
 	case LogicalTypeId::VARCHAR: {
@@ -294,6 +306,9 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 		gstate.currentRow = -1;
 		gstate.currentLocs = std::vector<size_t>(number_threads, 0);
 	}
+
+	// Set all values to NULL per default (sheetreader-core doesn't store information about empty cells)
+	SetAllInvalid(output, STANDARD_VECTOR_SIZE);
 
 	//! To get the correct order of rows we iterate for(buffer_index) { for(thread_index) { ... } }
 	//! This is due to how sheetreader-core writes the data to the buffers (stored in mCells)
@@ -387,7 +402,9 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 				long long adjustedRow = calcAdjustedRow(gstate.currentRow, mSkipRows);
 
 				bool types_align = cell.type == bind_data.SR_types[currentColumn];
-				// TODO: For some reason sheetreader-core doesn't determine empty cells to be T_NONE
+				// sheetreader-core doesn't determine empty cells to be T_NONE, instead it skips the cell,
+				// so it's not stored in mCells. We handle this by setting all cells as Invalid (aka null)
+				// and set them valid when they appear in mCells
 				if (cell.type == CellType::T_NONE || cell.type == CellType::T_ERROR || !types_align) {
 					SetNull(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
 				} else {
@@ -865,7 +882,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	// Probing the first two rows to get the types
 	if (first_buffer->size() < number_columns * 2) {
-		throw BinderException("Internal SheetReader extension error: Need minimum of two rows in first buffer to determine column types");
+		throw BinderException(
+		    "Internal SheetReader extension error: Need minimum of two rows in first buffer to determine column types");
 	}
 
 	for (idx_t i = 0; i < number_columns; i++) {
