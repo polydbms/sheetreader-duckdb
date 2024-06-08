@@ -52,8 +52,11 @@ public:
 	//! All column names (in order)
 	vector<string> names;
 
-	//! All column types (in order)
+	//! All column DuckDB types (in order)
 	vector<LogicalType> types;
+
+	//! All column SheetReader types (in order)
+	vector<CellType> SR_types;
 
 	XlsxFile xlsx_file;
 	unique_ptr<XlsxSheet> xlsx_sheet;

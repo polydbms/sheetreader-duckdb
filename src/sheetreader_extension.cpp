@@ -4,6 +4,7 @@
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/multi_file_reader.hpp"
 #include "duckdb/common/typedefs.hpp"
+#include "duckdb/common/types.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/string_type.hpp"
@@ -202,6 +203,12 @@ inline void SetRow(const SRScanData &bind_data, DataChunk &output, vector<DataPt
 	}
 }
 
+inline void SetNull(const SRScanData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors, const XlsxCell &cell,
+                    idx_t row_id, idx_t column_id) {
+	// Set cell to NULL
+	LogicalType expected_type = bind_data.types[column_id];
+	output.data[column_id].SetValue(row_id, Value(expected_type));
+}
 inline void SetCell(const SRScanData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors, const XlsxCell &cell,
                     idx_t row_id, idx_t column_id) {
 
@@ -272,6 +279,9 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 	}
 
 	size_t row_offset = gstate.chunk_count * STANDARD_VECTOR_SIZE;
+	auto calcAdjustedRow = [row_offset](long long currentRow, unsigned long skip_rows) {
+		return currentRow - skip_rows - row_offset;
+	};
 
 	// Initialize state
 	if (gstate.currentLocs.size() == 0) {
@@ -309,9 +319,6 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 			// currentCell <= cells.size() because there might be location info after last cell
 			for (; gstate.currentCell <= cells.size(); ++gstate.currentCell) {
 
-				auto calcAdjustedRow = [row_offset](long long currentRow, unsigned long skip_rows) {
-					return currentRow - skip_rows - row_offset;
-				};
 				// if (get_next_row) {
 				// 	break;
 				// }
@@ -337,9 +344,19 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 
 					// TODO: Check how expensive lambda call is
 					long long adjustedRow = calcAdjustedRow(gstate.currentRow, fsheet->mSkipRows);
+					// This only happens for header rows -- we want to skip them
 					if (adjustedRow < 0) {
 						++currentLoc;
-						++gstate.currentRow;
+						// Skip to next row
+						if (currentLoc < locs_infos.size()) {
+							gstate.currentCell = locs_infos[currentLoc].cell;
+						} else {
+							throw InternalException("Skipped more rows than available in first buffer -- consider "
+							                        "decreasing number of threads");
+							// No more location infos for this buffer
+							// TODO: Advance to next thread
+							// fsheet->mCells[gstate.currentThread].pop_front();
+						}
 						continue;
 					}
 
@@ -368,8 +385,15 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 				const XlsxCell &cell = cells[gstate.currentCell];
 				long long mSkipRows = fsheet->mSkipRows;
 				long long adjustedRow = calcAdjustedRow(gstate.currentRow, mSkipRows);
-				// std::cout << "Row: " << adjustedRow << " Adjusted Column: " << currentColumn << std::endl;
-				SetCell(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
+
+				bool types_align = cell.type == bind_data.SR_types[currentColumn];
+				// TODO: For some reason sheetreader-core doesn't determine empty cells to be T_NONE
+				if (cell.type == CellType::T_NONE || cell.type == CellType::T_ERROR || !types_align) {
+					SetNull(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
+				} else {
+					// std::cout << "Row: " << adjustedRow << " Adjusted Column: " << currentColumn << std::endl;
+					SetCell(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
+				}
 				++gstate.currentColumn;
 			}
 			fsheet->mCells[gstate.currentThread].pop_front();
@@ -841,7 +865,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	// Probing the first two rows to get the types
 	if (first_buffer->size() < number_columns * 2) {
-		throw BinderException("Internal SheetReader error: Number of columns in first buffer is less than expected");
+		throw BinderException("Internal SheetReader extension error: Need minimum of two rows in first buffer to determine column types");
 	}
 
 	for (idx_t i = 0; i < number_columns; i++) {
@@ -878,6 +902,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 			return_types = column_types_second_row;
 			bind_data->types = column_types_second_row;
+			bind_data->SR_types = colTypesByIndex_second_row;
 
 			vector<string> header_names;
 
@@ -904,6 +929,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		} else {
 			return_types = column_types_first_row;
 			bind_data->types = column_types_first_row;
+			bind_data->SR_types = colTypesByIndex_first_row;
 
 			names = column_names_first_row;
 			bind_data->names = column_names_first_row;
