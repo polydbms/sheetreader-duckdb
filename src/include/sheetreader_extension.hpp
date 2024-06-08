@@ -6,8 +6,8 @@
 #include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/function/function.hpp"
-#include "sheetreader/src/XlsxFile.h"
-#include "sheetreader/src/XlsxSheet.h"
+#include "sheetreader-core/src/XlsxFile.h"
+#include "sheetreader-core/src/XlsxSheet.h"
 
 #include <chrono>
 

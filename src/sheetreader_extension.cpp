@@ -14,8 +14,8 @@
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/vector_size.hpp"
 #include "duckdb/function/function.hpp"
-#include "sheetreader/src/XlsxFile.h"
-#include "sheetreader/src/XlsxSheet.h"
+#include "sheetreader-core/src/XlsxFile.h"
+#include "sheetreader-core/src/XlsxSheet.h"
 
 #include <chrono>
 #include <cmath>

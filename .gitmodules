@@ -6,3 +6,6 @@
 	path = extension-ci-tools
 	url = https://github.com/duckdb/extension-ci-tools
 	branch = main
+[submodule "src/include/sheetreader-core"]
+	path = src/include/sheetreader-core
+	url = git@github.com:freddie-freeloader/sheetreader-core.git
