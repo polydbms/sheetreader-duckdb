@@ -308,6 +308,10 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 			// TODO: Check when this is the case
 			// currentCell <= cells.size() because there might be location info after last cell
 			for (; gstate.currentCell <= cells.size(); ++gstate.currentCell) {
+
+				auto calcAdjustedRow = [row_offset](long long currentRow, unsigned long skip_rows) {
+					return currentRow - skip_rows - row_offset;
+				};
 				// if (get_next_row) {
 				// 	break;
 				// }
@@ -317,7 +321,10 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 				//
 				// This means that the values won't be updated if there is no location info for the current cell
 				// (e.g. not first cell in row)
-				// Loop is executed 2 times for first location info, since it's empty
+				//
+				// Loop is executed n+1 times for first location info, where n is the number of skip_rows (specified as
+				// parameter for interleaved) This is because, sheetreader creates location infoes for the skipped lines
+				// with cell == column == buffer == 0 sames as for the first "real" row
 				while (currentLoc < locs_infos.size() && locs_infos[currentLoc].buffer == gstate.currentBuffer &&
 				       locs_infos[currentLoc].cell == gstate.currentCell) {
 
@@ -327,6 +334,15 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 					} else {
 						gstate.currentRow = locs_infos[currentLoc].row;
 					}
+
+					// TODO: Check how expensive lambda call is
+					long long adjustedRow = calcAdjustedRow(gstate.currentRow, fsheet->mSkipRows);
+					if (adjustedRow < 0) {
+						++currentLoc;
+						++gstate.currentRow;
+						continue;
+					}
+
 					// Increment for next iteration
 					++currentLoc;
 
@@ -351,7 +367,7 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 				}
 				const XlsxCell &cell = cells[gstate.currentCell];
 				long long mSkipRows = fsheet->mSkipRows;
-				long long adjustedRow = gstate.currentRow - mSkipRows - row_offset;
+				long long adjustedRow = calcAdjustedRow(gstate.currentRow, mSkipRows);
 				// std::cout << "Row: " << adjustedRow << " Adjusted Column: " << currentColumn << std::endl;
 				SetCell(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
 				++gstate.currentColumn;
@@ -713,6 +729,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	int sheet_index;
 	bool sheet_index_set = false;
 
+	bool use_header = false;
+
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "sheet_name") {
@@ -720,6 +738,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		} else if (loption == "sheet_index") {
 			sheet_index = IntegerValue::Get(kv.second);
 			sheet_index_set = true;
+		} else if (loption == "has_header") {
+			use_header = BooleanValue::Get(kv.second);
 		} else {
 			continue;
 		}
@@ -761,12 +781,16 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			// TODO: Verfiy > 0
 			// Default: 0
 			bind_data->skip_rows = IntegerValue::Get(kv.second);
-		} else if (loption == "sheet_name" || loption == "sheet_index") {
+		} else if (loption == "sheet_name" || loption == "sheet_index" || loption == "has_header") {
 			continue;
 		} else {
 			throw BinderException("Unknown named parameter");
 		}
 	}
+
+	// Doesn't change the parsing (only when combined with specifyTypes) -- we simply store it, to read it later while
+	// copying
+	bind_data->xlsx_sheet->mHeaders = use_header;
 
 	// If number threads > 1, we set parallel true
 	if (bind_data->number_threads > 1) {
@@ -805,6 +829,9 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	vector<CellType> colTypesByIndex_first_row;
 	vector<CellType> colTypesByIndex_second_row;
+	// Might be used if header is present
+	vector<XlsxCell> cells_first_row;
+
 	// Get types of columns
 	// TODO: This can fail if
 	// 1. The first row is empty
@@ -819,6 +846,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	for (idx_t i = 0; i < number_columns; i++) {
 		colTypesByIndex_first_row.push_back(fsheet->mCells[0].front()[i].type);
+		cells_first_row.push_back(fsheet->mCells[0].front()[i]);
 	}
 
 	for (idx_t i = number_columns; i < number_columns * 2; i++) {
@@ -833,22 +861,46 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	bool first_row_all_string =
 	    ConvertCellTypes(column_types_first_row, column_names_first_row, colTypesByIndex_first_row);
 
+	if (use_header && !first_row_all_string) {
+		throw BinderException("First row must contain only strings when has_header is set to true");
+	}
+
 	vector<LogicalType> column_types_second_row;
 	vector<string> column_names_second_row;
-	bool has_headers = false;
+	bool has_header = false;
 
 	if (number_rows > 1) {
 		bool second_row_all_string =
 		    ConvertCellTypes(column_types_second_row, column_names_second_row, colTypesByIndex_second_row);
 
-		if (first_row_all_string && !second_row_all_string) {
-			has_headers = true;
+		if (use_header || (first_row_all_string && !second_row_all_string)) {
+			has_header = true;
 
 			return_types = column_types_second_row;
 			bind_data->types = column_types_second_row;
 
-			names = column_names_first_row;
-			bind_data->names = column_names_first_row;
+			vector<string> header_names;
+
+			// Get header names from cell values of first row
+			for (idx_t j = 0; j < cells_first_row.size(); j++) {
+				switch (cells_first_row[j].type) {
+				case CellType::T_STRING_REF: {
+					auto value = bind_data->xlsx_file.getString(cells_first_row[j].data.integer);
+					header_names.push_back(value);
+					break;
+				}
+				case CellType::T_STRING:
+				case CellType::T_STRING_INLINE: {
+					// TODO
+					throw BinderException("Inline & dynamic String types not supported yet");
+					break;
+				}
+				default:
+					throw BinderException("Header row contains non-string values");
+				}
+			}
+			names = header_names;
+			bind_data->names = header_names;
 		} else {
 			return_types = column_types_first_row;
 			bind_data->types = column_types_first_row;
@@ -858,27 +910,17 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		}
 	}
 
-	if (has_headers) {
+	if (has_header) {
 		bind_data->skip_rows++;
 		// TODO: Check whether this is correct
 		bind_data->xlsx_sheet->mSkipRows++;
 	}
 
-	// TODO: Check whether all columns string
-	// If so: Could be name of columns
-	// Check: If next row also all string
-	// if not -> use first row as column names & second row as types
-	// TODO: Make this the default behavior if named parameter `has_header` is set to true
-
-	return_types = column_types_first_row;
-	bind_data->types = column_types_first_row;
-	// TODO: Extract column names from sheet or named parameters or use default names
-	names = column_names_first_row;
-	bind_data->names = column_names_first_row;
-
 	// First row is discarded
 	// TODO: Remove when not using nextRow() anymore
-	auto discarded_val = fsheet->nextRow();
+	for (idx_t i = 0; i < bind_data->skip_rows; i++) {
+		fsheet->nextRow();
+	}
 
 	return std::move(bind_data);
 }
@@ -895,6 +937,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	sheetreader_table_function.named_parameters["threads"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["flag"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["skip_rows"] = LogicalType::INTEGER;
+	sheetreader_table_function.named_parameters["has_header"] = LogicalType::BOOLEAN;
 
 	ExtensionUtil::RegisterFunction(instance, sheetreader_table_function);
 }
