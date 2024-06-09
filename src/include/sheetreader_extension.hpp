@@ -3,6 +3,7 @@
 #include "duckdb.h"
 #include "duckdb.hpp"
 #include "duckdb/common/typedefs.hpp"
+#include "duckdb/common/types.hpp"
 #include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/function/function.hpp"
@@ -68,6 +69,12 @@ public:
 	idx_t skip_rows = 0;
 
 	idx_t flag = 0;
+
+	//! Coerce all cells to string in user defined column types
+	bool coerce_string = false;
+
+	//! User defined types
+	vector<LogicalType> user_types = {};
 
 	std::chrono::time_point<std::chrono::system_clock> start_time_parsing;
 	std::chrono::time_point<std::chrono::system_clock> finish_time_parsing;
