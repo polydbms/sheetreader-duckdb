@@ -771,6 +771,11 @@ inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRBindData &bind_dat
 inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 
+	// =====================================
+	// Get input parameters & prepare for parsing
+	// =====================================
+
+	// Get the file name from the input parameters & verify it exists
 	auto file_reader = MultiFileReader::Create(input.table_function);
 	auto file_list = file_reader->CreateFileList(context, input.inputs[0]);
 	auto file_names = file_list->GetAllFiles();
@@ -781,12 +786,18 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		throw BinderException("Only one file can be read at a time");
 	}
 
+	//! User specified sheet name
 	string sheet_name;
+	//! User specified sheet index -- starts with 1
 	int sheet_index;
+	//! Is set when the user specifies the sheet index with e.g. `sheet_index=2`
 	bool sheet_index_set = false;
 
+	//! User specified option to use header
 	bool use_header = false;
 
+	// Get named parameters that are needed for creating XlsxFile & XlsxSheet objects and therefore for creating
+	// bind_data
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "sheet_name") {
@@ -805,8 +816,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		throw BinderException("Sheet index & sheet name cannot be set at the same time.");
 	}
 
-	// Create the bind data object and return it
-	unique_ptr<duckdb::SRBindData> bind_data;
+	//! Contains all important data collected in this bind function & is returned to be used by table (copy) function
+	unique_ptr<SRBindData> bind_data;
 
 	try {
 		if (!sheet_name.empty()) {
@@ -814,14 +825,17 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		} else if (sheet_index_set) {
 			bind_data = make_uniq<SRBindData>(file_names[0], sheet_index);
 		} else {
+			// Default: sheet_index=1
 			bind_data = make_uniq<SRBindData>(file_names[0]);
 		}
 	} catch (std::exception &e) {
 		throw BinderException(e.what());
 	}
 
+	//! Is set when the user specifies the types of the columns with e.g. `types=[VARCHAR,DOUBLE]`
 	bool has_user_types = false;
 
+	// Get all left named parameters
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "version") {
@@ -839,7 +853,9 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		} else if (loption == "coerce_to_string") {
 			bind_data->coerce_to_string = BooleanValue::Get(kv.second);
 		} else if (loption == "types") {
+			// Get all types as strings defined in list/array
 			auto &children = ListValue::GetChildren(kv.second);
+			// Convert strings to LogicalTypes & check if they are supported
 			for (auto &child : children) {
 				string raw_type = StringValue::Get(child);
 				LogicalType logical_type = TransformStringToLogicalType(raw_type);
@@ -857,11 +873,12 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 					throw BinderException("Unsupported type \"%s\" for %s definition", raw_type, kv.first);
 				}
 				}
-
 				bind_data->user_types.push_back(logical_type);
 			}
+			// Indicate that user provided types
 			has_user_types = true;
 
+			// We already handled them before
 		} else if (loption == "sheet_name" || loption == "sheet_index" || loption == "has_header") {
 			continue;
 		} else {
@@ -880,61 +897,83 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		bind_data->xlsx_file.mParallelStrings = false;
 	}
 
-	auto start = std::chrono::system_clock::now();
+	// =====================================
+	// Parsing & check parsing result
+	// =====================================
 
+	//! Used for measuring time of parsing (for benchmarking)
+	auto start_parsing = std::chrono::system_clock::now();
+
+	// Parse the shared strings file
 	bind_data->xlsx_file.parseSharedStrings();
 
+	//! Used for better readability
 	auto &sheet = bind_data->xlsx_sheet;
 
+	// Parse the sheet
 	bool success = sheet->interleaved(bind_data->skip_rows, 0, bind_data->number_threads);
+
 	if (!success) {
 		throw BinderException("Failed to read sheet");
 	}
 
 	bind_data->xlsx_file.finalize();
 
-	auto end = std::chrono::system_clock::now();
-	std::chrono::duration<double> elapsed_seconds = end - start;
+	auto finished_parsing = std::chrono::system_clock::now();
+	std::chrono::duration<double> parsing_elapsed_seconds = finished_parsing - start_parsing;
+
+	// Used for benchmarking
 	if (bind_data->flag == 1) {
-		std::cout << "Parsing time time: " << elapsed_seconds.count() << "s" << std::endl;
+		std::cout << "Parsing time time: " << parsing_elapsed_seconds.count() << "s" << std::endl;
 	}
 
+	//! Number of columns in the sheet
 	auto number_columns = sheet->mDimension.first;
+	//! Number of rows in the sheet
 	auto number_rows = sheet->mDimension.second;
 
 	if (number_columns == 0 || number_rows == 0) {
 		throw BinderException("Sheet appears to be empty");
 	}
 
-	vector<CellType> colTypesByIndex_first_row;
-	vector<CellType> colTypesByIndex_second_row;
-	// Might be used if header is present
+	// =====================================
+	// Determine column types & names
+	// =====================================
+
+	//! Cell types in the first row after skipped rows
+	vector<CellType> cell_types_first_row;
+	//! Cell types in the second row after skipped rows
+	vector<CellType> cell_types_second_row;
+	//! Cell values in the first row after skipped rows
 	vector<XlsxCell> cells_first_row;
 
+	// First buffer of first thread
 	auto first_buffer = &sheet->mCells[0].front();
 
 	// Probing the first two rows to get the types
 	if (first_buffer->size() < number_columns * 2) {
-		throw BinderException(
-		    "Internal SheetReader extension error: Need minimum of two rows in first buffer to determine column types");
+		throw BinderException("Internal SheetReader extension error: Need minimum of two rows in first buffer to "
+		                      "determine column types and auto detect header row");
 	}
 
 	for (idx_t i = 0; i < number_columns; i++) {
-		colTypesByIndex_first_row.push_back(sheet->mCells[0].front()[i].type);
+		cell_types_first_row.push_back(sheet->mCells[0].front()[i].type);
 		cells_first_row.push_back(sheet->mCells[0].front()[i]);
 	}
 
 	for (idx_t i = number_columns; i < number_columns * 2; i++) {
-		colTypesByIndex_second_row.push_back(sheet->mCells[0].front()[i].type);
+		cell_types_second_row.push_back(sheet->mCells[0].front()[i].type);
 	}
 
 	// Convert CellType to LogicalType
-	vector<LogicalType> column_types_first_row;
-	vector<string> column_names_first_row;
-	idx_t column_index = 0;
 
-	bool first_row_all_string =
-	    ConvertCellTypes(column_types_first_row, column_names_first_row, colTypesByIndex_first_row);
+	//! DuckDB types of the cells in the first row
+	vector<LogicalType> column_types_first_row;
+	//! Column names of the cells in the first row
+	vector<string> column_names_first_row;
+
+	// Check if first row contains only string values, get DuckDB types & generic column names
+	bool first_row_all_string = ConvertCellTypes(column_types_first_row, column_names_first_row, cell_types_first_row);
 
 	if (use_header && !first_row_all_string) {
 		throw BinderException("First row must contain only strings when has_header is set to true");
@@ -942,18 +981,23 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	vector<LogicalType> column_types_second_row;
 	vector<string> column_names_second_row;
-	bool has_header = false;
+	//! Indicates whether a header row was detected
+	bool header_detected = false;
 
 	if (number_rows > 1) {
+		// Check if second row contains only string values, get DuckDB types & generic column names
 		bool second_row_all_string =
-		    ConvertCellTypes(column_types_second_row, column_names_second_row, colTypesByIndex_second_row);
+		    ConvertCellTypes(column_types_second_row, column_names_second_row, cell_types_second_row);
 
+		// If the first row contains only string values, but the second row doesn't, we assume that the first row is a header row
 		if (use_header || (first_row_all_string && !second_row_all_string)) {
-			has_header = true;
+			header_detected = true;
 
+			// Since the first row is a header row, we use the cell types of the second row
 			return_types = column_types_second_row;
 			bind_data->types = column_types_second_row;
 
+			//! Column names determined from the first row
 			vector<string> header_names;
 
 			// Get header names from cell values of first row
@@ -974,27 +1018,39 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 					throw BinderException("Header row contains non-string values");
 				}
 			}
+
+			// Set column names to header names
 			names = header_names;
 			bind_data->names = header_names;
 		} else {
+			// If first row is not a header row, we use the cell types of the first row for the column types
 			return_types = column_types_first_row;
 			bind_data->types = column_types_first_row;
 
+			// Use generic column names
 			names = column_names_first_row;
 			bind_data->names = column_names_first_row;
 		}
 	}
 
+	// Since header is only used for determining column names, we skip it
+	if (header_detected) {
+		bind_data->skip_rows++;
+		bind_data->xlsx_sheet->mSkipRows++;
+	}
+
+	// If user has specified types, we try to use them
 	if (has_user_types) {
 		if (bind_data->user_types.size() < number_columns) {
 			throw BinderException("Number of user defined types is less than number of columns in sheet");
 		}
 
-		// TODO: Check compatibility with return_types
 		idx_t column_index = 0;
 		for (auto &column_type : return_types) {
+
 			LogicalType user_type = bind_data->user_types[column_index];
 
+			// Check if user defined type is same as previously determined column type or can be coerced to string
 			if (user_type.id() != column_type.id() &&
 			    !(user_type == LogicalTypeId::VARCHAR && bind_data->coerce_to_string)) {
 				// TODO: Fix
@@ -1021,11 +1077,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		// Concat additional column names
 		bind_data->names.insert(bind_data->names.end(), additional_column_names.begin(), additional_column_names.end());
 		names = bind_data->names;
-	}
 
-	if (has_header) {
-		bind_data->skip_rows++;
-		bind_data->xlsx_sheet->mSkipRows++;
+		D_ASSERT(return_types.size() == names.size());
 	}
 
 	// First row is discarded (is only needed for versions that use nextRow())
@@ -1042,6 +1095,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	                                         SheetreaderBindFun, SRGlobalTableFunctionState::Init,
 	                                         SRLocalTableFunctionState::Init);
 
+	// Define all named parameters
 	sheetreader_table_function.named_parameters["sheet_name"] = LogicalType::VARCHAR;
 	sheetreader_table_function.named_parameters["sheet_index"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["version"] = LogicalType::INTEGER;
