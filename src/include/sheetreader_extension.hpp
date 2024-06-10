@@ -56,9 +56,6 @@ public:
 	//! All column DuckDB types (in order)
 	vector<LogicalType> types;
 
-	//! All column SheetReader types (in order)
-	vector<CellType> SR_types;
-
 	XlsxFile xlsx_file;
 	unique_ptr<XlsxSheet> xlsx_sheet;
 
@@ -71,7 +68,7 @@ public:
 	idx_t flag = 0;
 
 	//! Coerce all cells to string in user defined column types
-	bool coerce_string = false;
+	bool coerce_to_string = false;
 
 	//! User defined types
 	vector<LogicalType> user_types = {};
