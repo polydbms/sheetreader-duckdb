@@ -19,6 +19,7 @@ public:
 	std::string Name() override;
 };
 
+//! Contains all data that is determined during the bind function
 struct SRBindData : public TableFunctionData {
 public:
 	//! File name with path to file
@@ -30,15 +31,6 @@ public:
 	//! File name with path to file and index of sheet (starts with 1)
 	//! Throws exception if sheet at index is not found
 	SRBindData(string file_name, int sheet_index);
-
-	// void Bind(ClientContext &context, TableFunctionBindInput &input);
-
-	// void InitializeReaders(ClientContext &context);
-	// void InitializeFormats();
-	// void InitializeFormats(bool auto_detect);
-	// void SetCompression(const string &compression);
-
-	// static unique_ptr<SheetreaderScanData> Deserialize(Deserializer &deserializer);
 
 public:
 	//! The paths of the files we're reading
@@ -71,9 +63,10 @@ public:
 private:
 	SRBindData(ClientContext &context, vector<string> file_names, string sheet_name);
 };
-struct SRScanGlobalState {
+
+struct SRGlobalState {
 public:
-	SRScanGlobalState(ClientContext &context, const SRBindData &bind_data);
+	SRGlobalState(ClientContext &context, const SRBindData &bind_data);
 
 public:
 
@@ -89,38 +82,44 @@ public:
 
 	//! State of copying from mCells
 	size_t max_buffers;
-	size_t current_buffer;
+	//! Current index of thread
 	size_t current_thread;
+	//! Current index of buffer in thread
+	size_t current_buffer;
+	//! Current index of cell in buffer
 	size_t current_cell;
+	//! Current index of column in row
 	unsigned long current_column;
+	//! Current index of row in sheet
 	long long current_row;
+	//! Current index of row per thread
 	std::vector<size_t> current_locs;
 };
 
-struct SRScanLocalState {
+struct SRLocalState {
 public:
-	SRScanLocalState(ClientContext &context, SRScanGlobalState &gstate);
+	SRLocalState(ClientContext &context, SRGlobalState &gstate);
 
 private:
 	const SRBindData &bind_data;
 };
 
-struct SRGlobalTableFunctionState : public GlobalTableFunctionState {
+struct SRGlobalTableState : public GlobalTableFunctionState {
 public:
-	SRGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input);
+	SRGlobalTableState(ClientContext &context, TableFunctionInitInput &input);
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input);
 
 public:
-	SRScanGlobalState state;
+	SRGlobalState state;
 };
 
 struct SRLocalTableFunctionState : public LocalTableFunctionState {
 public:
-	SRLocalTableFunctionState(ClientContext &context, SRScanGlobalState &gstate);
+	SRLocalTableFunctionState(ClientContext &context, SRGlobalState &gstate);
 	static unique_ptr<LocalTableFunctionState> Init(ExecutionContext &context, TableFunctionInitInput &input,
 	                                                GlobalTableFunctionState *global_state);
 
 public:
-	SRScanLocalState state;
+	SRLocalState state;
 };
 } // namespace duckdb
