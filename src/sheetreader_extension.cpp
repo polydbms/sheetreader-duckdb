@@ -78,13 +78,14 @@ SRGlobalState::SRGlobalState(ClientContext &context, const SRBindData &bind_data
 SRLocalState::SRLocalState(ClientContext &context, SRGlobalState &gstate) : bind_data(gstate.bind_data) {
 }
 
-SRGlobalTableState::SRGlobalTableState(ClientContext &context, TableFunctionInitInput &input)
+SRGlobalTableFunctionState::SRGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input)
     : state(context, input.bind_data->Cast<SRBindData>()) {
 }
 
-unique_ptr<GlobalTableFunctionState> SRGlobalTableState::Init(ClientContext &context, TableFunctionInitInput &input) {
+unique_ptr<GlobalTableFunctionState> SRGlobalTableFunctionState::Init(ClientContext &context,
+                                                                      TableFunctionInitInput &input) {
 
-	auto result = make_uniq<SRGlobalTableState>(context, input);
+	auto result = make_uniq<SRGlobalTableFunctionState>(context, input);
 
 	return std::move(result);
 }
@@ -96,7 +97,7 @@ SRLocalTableFunctionState::SRLocalTableFunctionState(ClientContext &context, SRG
 unique_ptr<LocalTableFunctionState> SRLocalTableFunctionState::Init(ExecutionContext &context,
                                                                     TableFunctionInitInput &input,
                                                                     GlobalTableFunctionState *global_state) {
-	auto &gstate = global_state->Cast<SRGlobalTableState>();
+	auto &gstate = global_state->Cast<SRGlobalTableFunctionState>();
 	auto result = make_uniq<SRLocalTableFunctionState>(context.client, gstate.state);
 
 	return std::move(result);
@@ -494,11 +495,13 @@ inline void FinishChunk(DataChunk &output, idx_t cardinality, SRGlobalState &gst
 
 //! Copy data from sheetreader-core to DuckDB data chunk
 //! - Is called after bind function
-//! - Is called multiple times until all data is copied are no more rows are needed (e.g. for LIMIT clause) 
+//! - Is called multiple times until all data is copied are no more rows are needed (e.g. for LIMIT clause)
 inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 
+	//! Data from bind function
 	const SRBindData &bind_data = data_p.bind_data->Cast<SRBindData>();
-	auto &gstate = data_p.global_state->Cast<SRGlobalTableState>().state;
+	//! State persisted in between table (copy) function calls
+	SRGlobalState &gstate = data_p.global_state->Cast<SRGlobalTableFunctionState>().state;
 
 	if (gstate.chunk_count == 0) {
 		gstate.start_time_copy = std::chrono::system_clock::now();
@@ -506,12 +509,21 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 
 	auto start_time_copy_chunk = std::chrono::system_clock::now();
 
-	auto &xlsx_file = bind_data.xlsx_file;
-	auto &sheet = bind_data.xlsx_sheet;
+	//! Create alternative name for bind_data.xlsx_file for better readability
+	const XlsxFile &xlsx_file = bind_data.xlsx_file;
+	//! Create alternative name for bind_data.sheet for better readability
+	const unique_ptr<XlsxSheet> &sheet = bind_data.xlsx_sheet;
 
+	//! Number of columns (i.e. number of vectors in the data chunk)
 	const idx_t column_count = output.ColumnCount();
 
+	D_ASSERT(column_count == bind_data.types.size());
+
+	// =====================================
 	// Store FlatVectors for all columns (they have different data types)
+	// =====================================
+
+	//! Holds pointers to the data of the vectors in the data chunk
 	vector<DataPtr> flat_vectors;
 
 	for (idx_t col = 0; col < column_count; col++) {
@@ -554,18 +566,30 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 		}
 	}
 
-	if (bind_data.version == 0) {
-		// This version uses SetValue for all types
+	// =====================================
+	// Copy data from sheetreader-core's mCells to DuckDB data chunk
+	// =====================================
 
-		// Get the next batch of data from sheetreader
+	// Fastest and most versatile version is 3
+	if (bind_data.version == 1) {
+		// This version uses
+		// - SetValue() for all types
+		//   SetValue() is slower than directly writing to the flat vectors
+		// - nextRow() to get the XlsxCells from sheet.mCells()
+		//   This is slower than iterating over the buffers directly
+
 		idx_t i = 0;
+
+		// Get STANDARD_VECTOR_SIZE rows from sheetreader-core
 		for (; i < STANDARD_VECTOR_SIZE; i++) {
+			//! Get next row from sheetreader-core
 			auto row = sheet->nextRow();
 			if (row.first == 0) {
 				break;
 			}
 			auto &row_values = row.second;
 
+			// Set contents of row
 			for (idx_t j = 0; j < column_count; j++) {
 				switch (bind_data.types[j].id()) {
 				case LogicalTypeId::VARCHAR: {
@@ -598,8 +622,11 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 
 		return;
 
-	} else if (bind_data.version == 1) {
-		// This version uses SetValue only for VARCHAR, for other types it uses directly the flat vectors
+	} else if (bind_data.version == 2) {
+		// This version uses
+		// - Uses SetValue only for VARCHAR, for other types it uses directly the flat vectors
+		// - nextRow() to get the XlsxCells from sheet.mCells()
+		//   This is slower than iterating over the buffers directly
 
 		// Get the next batch of data from sheetreader
 		idx_t i = 0;
@@ -646,8 +673,12 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 		return;
 
 	} else if (bind_data.version == 3) {
-		// This version doesn't use nextRow() and has more features (coercion to string, handling empty cells, etc.)
+		// This version:
+		// - Uses SetValue only for VARCHAR, for other types it uses directly the flat vectors
+		// - Doesn't use nextRow() but directly iterates over the buffers
+		// - Has more features (coercion to string, handling empty cells, etc.)
 
+		//! Number of rows copied in this iteration
 		auto cardinality = StatefulCopy(gstate, bind_data, output, flat_vectors);
 
 		FinishChunk(output, cardinality, gstate, start_time_copy_chunk, bind_data.flag == 1);
@@ -656,15 +687,23 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 	}
 }
 
+// =====================================
+// Following are definitions for the bind function
+// =====================================
+
+//! Converts the cell types from sheetreader-core to DuckDB types (column_types)
+//! and it also sets the column names (uses generic names)
 inline bool ConvertCellTypes(vector<LogicalType> &column_types, vector<string> &column_names,
-                             vector<CellType> &colTypesByIndex) {
-	idx_t column_index = 0;
+                             vector<CellType> &cell_types) {
+	idx_t current_column_index = 0;
+	//! Indicates if the first row contains only string values
 	bool first_row_all_string = true;
-	for (auto &colType : colTypesByIndex) {
+
+	for (auto &colType : cell_types) {
 		switch (colType) {
 		case CellType::T_STRING_REF:
 			column_types.push_back(LogicalType::VARCHAR);
-			column_names.push_back("String" + std::to_string(column_index));
+			column_names.push_back("String" + std::to_string(current_column_index));
 			break;
 		case CellType::T_STRING:
 		case CellType::T_STRING_INLINE:
@@ -673,27 +712,30 @@ inline bool ConvertCellTypes(vector<LogicalType> &column_types, vector<string> &
 			break;
 		case CellType::T_NUMERIC:
 			column_types.push_back(LogicalType::DOUBLE);
-			column_names.push_back("Numeric" + std::to_string(column_index));
+			column_names.push_back("Numeric" + std::to_string(current_column_index));
 			first_row_all_string = false;
 			break;
 		case CellType::T_BOOLEAN:
 			column_types.push_back(LogicalType::BOOLEAN);
-			column_names.push_back("Boolean" + std::to_string(column_index));
+			column_names.push_back("Boolean" + std::to_string(current_column_index));
 			first_row_all_string = false;
 			break;
 		case CellType::T_DATE:
 			column_types.push_back(LogicalType::DATE);
-			column_names.push_back("Date" + std::to_string(column_index));
+			column_names.push_back("Date" + std::to_string(current_column_index));
 			first_row_all_string = false;
 			break;
 		default:
-			throw BinderException("Unknown cell type in column in column " + std::to_string(column_index));
+			throw BinderException("Unknown cell type in column in column " + std::to_string(current_column_index));
 		}
-		column_index++;
+		current_column_index++;
 	}
+
 	return first_row_all_string;
 }
 
+//! Get the names of the columns from the first row
+//! Assumes that the first row contains only string values
 inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRBindData &bind_data) {
 
 	vector<string> column_names;
@@ -719,6 +761,13 @@ inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRBindData &bind_dat
 	return column_names;
 }
 
+//! Bind function for the sheetreader extension
+//! - Gets (named) parameters (filename etc.) of table function and stores them
+//! - Parses the .Xlsx-file
+//! - Reads the first row to determine the types of the columns
+//! - Reads the first row to determine the names of the columns (auto detects if the first row is a header)
+//! - Creates the bind data object (is subtype of FunctionData) which contains all necessary information for the copy
+//!   and most importantly stores the XlsxFile & XlsxSheet objects
 inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 
@@ -990,7 +1039,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register a table function
 	TableFunction sheetreader_table_function("sheetreader", {LogicalType::VARCHAR}, SheetreaderCopyTableFun,
-	                                         SheetreaderBindFun, SRGlobalTableState::Init,
+	                                         SheetreaderBindFun, SRGlobalTableFunctionState::Init,
 	                                         SRLocalTableFunctionState::Init);
 
 	sheetreader_table_function.named_parameters["sheet_name"] = LogicalType::VARCHAR;

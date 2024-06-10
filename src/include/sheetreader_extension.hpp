@@ -46,11 +46,15 @@ public:
 	//! All column DuckDB types (in order)
 	vector<LogicalType> types;
 
+	//! The .XLSX-file -- created by sheetreader-core
 	XlsxFile xlsx_file;
+	//! A sheet of xlsx_file -- created by sheetreader-core
 	unique_ptr<XlsxSheet> xlsx_sheet;
 
+	//! Number of threads used while parsing
 	idx_t number_threads = 1;
 
+	//! Number of rows to skip while parsing
 	idx_t skip_rows = 0;
 
 	idx_t flag = 0;
@@ -67,7 +71,7 @@ public:
 private:
 	SRBindData(ClientContext &context, vector<string> file_names, string sheet_name);
 };
-
+//! Keeps state in between calls to the table (copy) function
 struct SRGlobalState {
 public:
 	SRGlobalState(ClientContext &context, const SRBindData &bind_data);
@@ -80,8 +84,11 @@ public:
 	//! Number of chunk read so far
 	idx_t chunk_count = 0;
 
+	//! Start time of current chunk
 	std::chrono::time_point<std::chrono::system_clock> start_time_copy;
+	//! Finish time of current chunk
 	std::chrono::time_point<std::chrono::system_clock> finish_time_copy;
+	//! Copy times of all chunks
 	vector<double> times_copy = {};
 
 	//! State of copying from mCells
@@ -108,9 +115,10 @@ private:
 	const SRBindData &bind_data;
 };
 
-struct SRGlobalTableState : public GlobalTableFunctionState {
+//! Contains SRGlobalState
+struct SRGlobalTableFunctionState : public GlobalTableFunctionState {
 public:
-	SRGlobalTableState(ClientContext &context, TableFunctionInitInput &input);
+	SRGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input);
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input);
 
 public:
