@@ -178,16 +178,19 @@ inline void SetCell(const SRBindData &bind_data, DataChunk &output, vector<DataP
 	}
 }
 
+//! Coerce cell to string and save it in the data chunk
 inline void SetCellString(const SRBindData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors,
                           const XlsxCell &cell, idx_t row_id, idx_t column_id) {
 
 	auto &xlsx_file = bind_data.xlsx_file;
 
-	// TODO: Maybe get validity masks with flat_vectors, so we don't have to get it here for every cell
+	// Get validity mask of the column and set it to valid (i.e. not NULL)
 	Vector &vec = output.data[column_id];
 	auto &validity = FlatVector::Validity(vec);
 	validity.SetValid(row_id);
 
+	// Similar to SetCell() only difference:
+	// Use coercion method depending on the type of the XlsxCell
 	switch (cell.type) {
 	case CellType::T_STRING_REF: {
 		auto value = xlsx_file.getString(cell.data.integer);
@@ -196,7 +199,6 @@ inline void SetCellString(const SRBindData &bind_data, DataChunk &output, vector
 	}
 	case CellType::T_NUMERIC: {
 		auto value = cell.data.real;
-		// Convert value to String
 		string str = std::to_string(value);
 		output.data[column_id].SetValue(row_id, Value(str));
 		break;
@@ -218,6 +220,8 @@ inline void SetCellString(const SRBindData &bind_data, DataChunk &output, vector
 	}
 }
 
+//! Check if the types of the XlsxCell and the column are compatible
+//! Types are compatible with VARCHAR if coercing to string is enabled
 bool TypesCompatible(const LogicalType &expected_type, const CellType &cell_type, bool coerce_to_string) {
 	switch (expected_type.id()) {
 	case LogicalTypeId::VARCHAR:
@@ -240,6 +244,7 @@ bool TypesCompatible(const LogicalType &expected_type, const CellType &cell_type
 	case LogicalTypeId::DATE:
 		return cell_type == CellType::T_DATE;
 	default:
+		// TODO: Add support for T_STRING and T_STRING_INLINE
 		throw InternalException("This shouldn't happen. Unsupported Logical type");
 	}
 }
@@ -429,22 +434,33 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 				// and set them valid when they appear in mCells
 				if (cell.type == CellType::T_NONE || cell.type == CellType::T_ERROR || !types_compatible) {
 					SetNull(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
-				} else if (bind_data.types[current_column] == LogicalType::VARCHAR && bind_data.coerce_to_string)
-				{
+				} else if (bind_data.types[current_column] == LogicalType::VARCHAR && bind_data.coerce_to_string) {
 					SetCellString(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
 				} else {
 					SetCell(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
 				}
+
+				// Advance to next column
 				++gstate.current_column;
 			}
+
+			// If we reached the last cell in the current buffer, we remove it from the thread
 			sheet->mCells[gstate.current_thread].pop_front();
+			// Reset for next buffer
 			gstate.current_cell = 0;
 		}
+		// Reset thread index for next buffer index
 		gstate.current_thread = 0;
 	}
+	// Return number of copied rows in this chunk when all buffers are read (i.e. curren_buffer == max_buffers)
 	return GetCardinality(gstate);
 }
 
+//! Finish the current chunk
+//! - Set the cardinality of the chunk
+//! - Store the time it took to copy the chunk
+//! - Increment the chunk count
+//! - Print the time it took to copy the chunk if print_time is true and last chunk is reached (cardinality == 0)
 inline void FinishChunk(DataChunk &output, idx_t cardinality, SRGlobalState &gstate,
                         std::chrono::time_point<std::chrono::system_clock> start_time_copy_chunk,
                         bool print_time = false) {
@@ -470,11 +486,16 @@ inline void FinishChunk(DataChunk &output, idx_t cardinality, SRGlobalState &gst
 		std::cout << "Pure Copy time: " << sum << "s" << std::endl;
 	}
 
+	// Increment number of chunks read so far
 	gstate.chunk_count++;
+
 	return;
 }
 
-inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+//! Copy data from sheetreader-core to DuckDB data chunk
+//! - Is called after bind function
+//! - Is called multiple times until all data is copied are no more rows are needed (e.g. for LIMIT clause) 
+inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 
 	const SRBindData &bind_data = data_p.bind_data->Cast<SRBindData>();
 	auto &gstate = data_p.global_state->Cast<SRGlobalTableState>().state;
@@ -492,9 +513,6 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 
 	// Store FlatVectors for all columns (they have different data types)
 	vector<DataPtr> flat_vectors;
-
-	// Is this useful?
-	// data_ptr_t dataptr = output.data[0].GetData();
 
 	for (idx_t col = 0; col < column_count; col++) {
 		switch (bind_data.types[col].id()) {
@@ -971,7 +989,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register a table function
-	TableFunction sheetreader_table_function("sheetreader", {LogicalType::VARCHAR}, SheetreaderTableFun,
+	TableFunction sheetreader_table_function("sheetreader", {LogicalType::VARCHAR}, SheetreaderCopyTableFun,
 	                                         SheetreaderBindFun, SRGlobalTableState::Init,
 	                                         SRLocalTableFunctionState::Init);
 

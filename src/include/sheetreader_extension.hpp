@@ -77,7 +77,7 @@ public:
 	//! Bound data
 	const SRBindData &bind_data;
 
-	//! Number of reads so far
+	//! Number of chunk read so far
 	idx_t chunk_count = 0;
 
 	std::chrono::time_point<std::chrono::system_clock> start_time_copy;
