@@ -178,7 +178,73 @@ inline void SetCell(const SRBindData &bind_data, DataChunk &output, vector<DataP
 	}
 }
 
-//! Check if curren_row is within the limit of the current chunk
+inline void SetCellString(const SRBindData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors,
+                          const XlsxCell &cell, idx_t row_id, idx_t column_id) {
+
+	auto &xlsx_file = bind_data.xlsx_file;
+
+	// TODO: Maybe get validity masks with flat_vectors, so we don't have to get it here for every cell
+	Vector &vec = output.data[column_id];
+	auto &validity = FlatVector::Validity(vec);
+	validity.SetValid(row_id);
+
+	switch (cell.type) {
+	case CellType::T_STRING_REF: {
+		auto value = xlsx_file.getString(cell.data.integer);
+		output.data[column_id].SetValue(row_id, Value(value));
+		break;
+	}
+	case CellType::T_NUMERIC: {
+		auto value = cell.data.real;
+		// Convert value to String
+		string str = std::to_string(value);
+		output.data[column_id].SetValue(row_id, Value(str));
+		break;
+	}
+	case CellType::T_BOOLEAN: {
+		auto value = cell.data.boolean;
+		string str = value ? "TRUE" : "FALSE";
+		output.data[column_id].SetValue(row_id, Value(str));
+		break;
+	}
+	case CellType::T_DATE: {
+		date_t value = date_t((int)(cell.data.real / 86400.0));
+		string str = Date::ToString(value);
+		output.data[column_id].SetValue(row_id, Value(str));
+		break;
+	}
+	default:
+		throw InternalException("This shouldn't happen. Unsupported Cell type");
+	}
+}
+
+bool TypesCompatible(const LogicalType &expected_type, const CellType &cell_type, bool coerce_to_string) {
+	switch (expected_type.id()) {
+	case LogicalTypeId::VARCHAR:
+		if (coerce_to_string) {
+			switch (cell_type) {
+			case CellType::T_STRING_REF:
+			case CellType::T_NUMERIC:
+			case CellType::T_BOOLEAN:
+			case CellType::T_DATE:
+				return true;
+			default:
+				return false;
+			}
+		}
+		return cell_type == CellType::T_STRING_REF;
+	case LogicalTypeId::DOUBLE:
+		return cell_type == CellType::T_NUMERIC;
+	case LogicalTypeId::BOOLEAN:
+		return cell_type == CellType::T_BOOLEAN;
+	case LogicalTypeId::DATE:
+		return cell_type == CellType::T_DATE;
+	default:
+		throw InternalException("This shouldn't happen. Unsupported Logical type");
+	}
+}
+
+//! Check if current_row is within the limit of the current chunk
 bool CheckRowLimitReached(SRGlobalState &gstate) {
 	// Need offset, since current_row is index of the current row in whole table.
 	// So we subtract the number of rows (determined by chunk) already copied
@@ -355,14 +421,18 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 				long long mSkipRows = sheet->mSkipRows;
 				long long adjustedRow = calcAdjustedRow(gstate.current_row, mSkipRows);
 
-				bool types_align = cell.type == bind_data.SR_types[current_column];
+				bool types_compatible =
+				    TypesCompatible(bind_data.types[current_column], cell.type, bind_data.coerce_to_string);
+
 				// sheetreader-core doesn't determine empty cells to be T_NONE, instead it skips the cell,
 				// so it's not stored in mCells. We handle this by setting all cells as Invalid (aka null)
 				// and set them valid when they appear in mCells
-				if (cell.type == CellType::T_NONE || cell.type == CellType::T_ERROR || !types_align) {
+				if (cell.type == CellType::T_NONE || cell.type == CellType::T_ERROR || !types_compatible) {
 					SetNull(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
+				} else if (bind_data.types[current_column] == LogicalType::VARCHAR && bind_data.coerce_to_string)
+				{
+					SetCellString(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
 				} else {
-					// std::cout << "Row: " << adjustedRow << " Adjusted Column: " << currentColumn << std::endl;
 					SetCell(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
 				}
 				++gstate.current_column;
@@ -527,7 +597,7 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 				switch (bind_data.types[j].id()) {
 				case LogicalTypeId::VARCHAR: {
 					auto value = xlsx_file.getString(row_values[j].data.integer);
-					// string_t creates values that fail the UTF-8 check, so we use the unperformant technique
+					// string_t creates values that fail the UTF-8 check, so we use the slow technique
 					// flat_vectors[j].string_data[i] = string_t(value);
 					output.data[j].SetValue(i, Value(value));
 					break;
@@ -683,6 +753,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		throw BinderException(e.what());
 	}
 
+	bool has_user_types = false;
+
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "version") {
@@ -697,9 +769,32 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		} else if (loption == "skip_rows") {
 			// Default: 0
 			bind_data->skip_rows = IntegerValue::Get(kv.second);
-			if (bind_data->skip_rows < 0) {
-				throw BinderException("Number of rows to skip must be greater than or equal to 0");
+		} else if (loption == "coerce_to_string") {
+			bind_data->coerce_to_string = BooleanValue::Get(kv.second);
+		} else if (loption == "types") {
+			auto &children = ListValue::GetChildren(kv.second);
+			for (auto &child : children) {
+				string raw_type = StringValue::Get(child);
+				LogicalType logical_type = TransformStringToLogicalType(raw_type);
+				if (logical_type.id() == LogicalTypeId::USER) {
+					throw BinderException("Unrecognized type \"%s\" for %s definition", raw_type, kv.first);
+				}
+				switch (logical_type.id()) {
+				case LogicalTypeId::VARCHAR:
+				case LogicalTypeId::DOUBLE:
+				case LogicalTypeId::BOOLEAN:
+				case LogicalTypeId::DATE: {
+					break;
+				}
+				default: {
+					throw BinderException("Unsupported type \"%s\" for %s definition", raw_type, kv.first);
+				}
+				}
+
+				bind_data->user_types.push_back(logical_type);
 			}
+			has_user_types = true;
+
 		} else if (loption == "sheet_name" || loption == "sheet_index" || loption == "has_header") {
 			continue;
 		} else {
@@ -791,7 +886,6 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 			return_types = column_types_second_row;
 			bind_data->types = column_types_second_row;
-			bind_data->SR_types = colTypesByIndex_second_row;
 
 			vector<string> header_names;
 
@@ -818,11 +912,48 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		} else {
 			return_types = column_types_first_row;
 			bind_data->types = column_types_first_row;
-			bind_data->SR_types = colTypesByIndex_first_row;
 
 			names = column_names_first_row;
 			bind_data->names = column_names_first_row;
 		}
+	}
+
+	if (has_user_types) {
+		if (bind_data->user_types.size() < number_columns) {
+			throw BinderException("Number of user defined types is less than number of columns in sheet");
+		}
+
+		// TODO: Check compatibility with return_types
+		idx_t column_index = 0;
+		for (auto &column_type : return_types) {
+			LogicalType user_type = bind_data->user_types[column_index];
+
+			if (user_type.id() != column_type.id() &&
+			    !(user_type == LogicalTypeId::VARCHAR && bind_data->coerce_to_string)) {
+				// TODO: Fix
+				// throw BinderException("User defined type %s for column with index %d is not compatible with %s",
+				//                       EnumUtil::ToString<LogicalType>(user_type), column_index,
+				//                       EnumUtil::ToString<LogicalType>(column_type));
+				throw BinderException("User defined type  for column with index %d is not compatible with",
+				                      column_index);
+			}
+			column_index++;
+		}
+
+		// Add column names, if they are new user defined columns
+		vector<string> additional_column_names;
+
+		while (column_index < bind_data->user_types.size()) {
+			additional_column_names.push_back("Column " + std::to_string(column_index));
+			column_index++;
+		}
+
+		return_types = bind_data->user_types;
+		bind_data->types = bind_data->user_types;
+
+		// Concat additional column names
+		bind_data->names.insert(bind_data->names.end(), additional_column_names.begin(), additional_column_names.end());
+		names = bind_data->names;
 	}
 
 	if (has_header) {
@@ -851,6 +982,11 @@ static void LoadInternal(DatabaseInstance &instance) {
 	sheetreader_table_function.named_parameters["flag"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["skip_rows"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["has_header"] = LogicalType::BOOLEAN;
+	// TODO: Support STRUCT, i.e. { 'column_name': 'type', ... }
+	// We use ANY here, similar to read_csv.cpp, but we expect a STRUCT or LIST
+	// sheetreader_table_function.named_parameters["types"] = LogicalType::ANY;
+	sheetreader_table_function.named_parameters["types"] = LogicalType::LIST(LogicalType::VARCHAR);
+	sheetreader_table_function.named_parameters["coerce_to_string"] = LogicalType::BOOLEAN;
 
 	ExtensionUtil::RegisterFunction(instance, sheetreader_table_function);
 }
