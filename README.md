@@ -6,7 +6,20 @@ This DuckDB extension, Sheetreader, allows you to read .XLSX files by using http
 
 This repository is based on https://github.com/duckdb/extension-template.
 
-### Installing pre-built binaries
+## Table of Contents
+
+- [Sheetreader DuckDB extension](#sheetreader-duckdb-extension)
+  - [Table of Contents](#table-of-contents)
+  - [Installing pre-built binaries](#installing-pre-built-binaries)
+  - [Usage](#usage)
+    - [Parameters](#parameters)
+  - [Building yourself](#building-yourself)
+    - [Running the extension](#running-the-extension)
+  - [Benchmarks](#benchmarks)
+
+
+## Installing pre-built binaries
+
 To install your extension binaries from S3, you will need to do two things. Firstly, DuckDB should be launched with the
 `allow_unsigned_extensions` option set to true. How to set this will depend on the client you're using. Some examples:
 
@@ -55,8 +68,23 @@ D LOAD sheetreader;
 
 Now we can use the features from the extension directly in DuckDB. The extension contains a table function `sheetreader()` that takes the path of an .XLSX file and returns a table:
 ```sql
-D from sheetreader('data.xlsx',threads=4);
+D from sheetreader('data.xlsx');
 ```
+
+## Usage
+
+### Parameters
+
+| Name | Description | Type | Default |
+|:----|:-----------|:----:|:-------|
+| `sheet_index` | Index of the sheet to read. Starts at 1. | `INTEGER` | `1` |
+| `sheet_name` | Name of the sheet to read. <br> Only either `sheet_index` or `sheet_name` can be set.  | `VARCHAR` | `""` |
+| `threads` | Number of threads to use, while parsing | `INTEGER` | Half of available cores; minimum 1 |
+| `skip_rows` | Number of rows to skip | `INTEGER` | `0` |
+| `has_header` | Force to treat first row as header row. <br> <ul> <li> If successful, the cell contents are used for column names. </li> <li> If set to `false` (which is the default), the extension will still try to treat the first row as header row. <br> The difference is that it will not fail, if the first row is not usable. </li> </ul> | `BOOLEAN` | `false` |
+| `types` | List of types for all columns <ul> <li> Types currently available:<br> `VARCHAR`,`BOOLEAN`,`DOUBLE`, `DATE`.</li> <li> Useful in combination with `coerce_to_string` and `force_types`. </li> </ul> | `LIST(VARCHAR)` | Uses types determined by first & second row (after skipped rows) |
+| `coerce_to_string` | Coerce all cells in column of type `VARCHAR` to string (i.e. `VARCHAR`). | `BOOLEAN` | `false` |
+| `force_types` | Use `types` even if they are not compatible with types determined by first/second row. <br> Cells, that are not of the column type, are set to `NULL` or coerced to string, if option is set. | `BOOLEAN` | `false` |
 
 ## Building yourself
 
@@ -74,4 +102,9 @@ The main binaries that will be built are:
 
 ### Running the extension
 
-To run the extension code, simply start the shell with `./build/release/duckdb`.
+To run the self-built extension code, simply start the shell with `./build/release/duckdb`.
+
+## Benchmarks
+
+TBD
+<!-- Benchmarks of sheetreader & spatial + link to paper. -->

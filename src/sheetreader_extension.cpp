@@ -836,6 +836,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	bool has_user_types = false;
 
 	// Get all left named parameters
+	// You can find the documentation of the named parameters in the README.md and header file
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "version") {
@@ -852,6 +853,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			bind_data->skip_rows = IntegerValue::Get(kv.second);
 		} else if (loption == "coerce_to_string") {
 			bind_data->coerce_to_string = BooleanValue::Get(kv.second);
+		} else if (loption == "force_types") {
+			bind_data->force_types = BooleanValue::Get(kv.second);
 		} else if (loption == "types") {
 			// Get all types as strings defined in list/array
 			auto &children = ListValue::GetChildren(kv.second);
@@ -989,7 +992,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		bool second_row_all_string =
 		    ConvertCellTypes(column_types_second_row, column_names_second_row, cell_types_second_row);
 
-		// If the first row contains only string values, but the second row doesn't, we assume that the first row is a header row
+		// If the first row contains only string values, but the second row doesn't, we assume that the first row is a
+		// header row
 		if (use_header || (first_row_all_string && !second_row_all_string)) {
 			header_detected = true;
 
@@ -1051,7 +1055,8 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			LogicalType user_type = bind_data->user_types[column_index];
 
 			// Check if user defined type is same as previously determined column type or can be coerced to string
-			if (user_type.id() != column_type.id() &&
+			// If forced_types == true, the compatibility check is skipped
+			if (!bind_data->force_types && user_type.id() != column_type.id() &&
 			    !(user_type == LogicalTypeId::VARCHAR && bind_data->coerce_to_string)) {
 				// TODO: Fix
 				// throw BinderException("User defined type %s for column with index %d is not compatible with %s",
@@ -1107,6 +1112,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	// We use ANY here, similar to read_csv.cpp, but we expect a STRUCT or LIST
 	// sheetreader_table_function.named_parameters["types"] = LogicalType::ANY;
 	sheetreader_table_function.named_parameters["types"] = LogicalType::LIST(LogicalType::VARCHAR);
+	sheetreader_table_function.named_parameters["force_types"] = LogicalType::BOOLEAN;
 	sheetreader_table_function.named_parameters["coerce_to_string"] = LogicalType::BOOLEAN;
 
 	ExtensionUtil::RegisterFunction(instance, sheetreader_table_function);
