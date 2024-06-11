@@ -65,6 +65,9 @@ public:
 	//! User defined types
 	vector<LogicalType> user_types = {};
 
+	//! Use user_types even if they are not compatible with types determined by first/second row
+	bool force_types = false;
+
 	std::chrono::time_point<std::chrono::system_clock> start_time_parsing;
 	std::chrono::time_point<std::chrono::system_clock> finish_time_parsing;
 
