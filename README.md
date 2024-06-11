@@ -68,10 +68,16 @@ D LOAD sheetreader;
 
 Now we can use the features from the extension directly in DuckDB. The extension contains a table function `sheetreader()` that takes the path of an .XLSX file and returns a table:
 ```sql
-D from sheetreader('data.xlsx');
+D FROM sheetreader('data.xlsx');
 ```
 
 ## Usage
+
+Example usage of the `sheetreader()` table function with many available parameters set:
+
+```sql
+D CREATE TABLE test AS FROM sheetreader('test.xlsx',sheet_index=1, threads=16, skip_rows=0, has_header=true, types=[boolean,varchar], coerce_to_string=true, force_types=true);
+```
 
 ### Parameters
 
