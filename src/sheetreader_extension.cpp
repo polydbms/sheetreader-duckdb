@@ -38,69 +38,59 @@
 
 namespace duckdb {
 
-// TODO: Fix default constructor
-SRScanData::SRScanData(string file_name)
-    : xlsx_file(file_name), xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(1))) {
+//! Determine default number of threads
+inline idx_t DefaultThreads() {
+	// Returns 0 if not able to detect
+	idx_t sys_number_threads = std::thread::hardware_concurrency();
+
+	// Don't be to greedy
+	idx_t appropriate_number_threads = sys_number_threads / 2;
+
+	if (appropriate_number_threads <= 0) {
+		appropriate_number_threads = 1;
+	}
+
+	return appropriate_number_threads;
 }
 
-SRScanData::SRScanData(string file_name, string sheet_name)
-    : xlsx_file(file_name), xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(sheet_name))) {
+// =====================================
+// Following are a bunch of constructors for classes that hold the state of the sheetreader extension
+// Find the definitions & documentation of these classes in the sheetreader_extension.hpp file
+// =====================================
+
+SRBindData::SRBindData(string file_name) : SRBindData(file_name, 1) {
 }
 
-SRScanData::SRScanData(string file_name, int sheet_index)
-    : xlsx_file(file_name), xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(sheet_index))) {
+SRBindData::SRBindData(string file_name, string sheet_name)
+    : xlsx_file(file_name), xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(sheet_name))),
+      number_threads(DefaultThreads()) {
 }
 
-// TODO: Is this still needed?
-// SRScanData::SRScanData(ClientContext &context, vector<string> file_names, string sheet_name)
-//     : file_names(std::move(file_names)), xlsx_file(file_names[0]),
-//       xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(1))) {
-// 	//, xlsx_file(make_uniq<XlsxFile>(file_names[0]))
-// 	// InitializeReaders(context);
-// 	// InitializeFormats();
-// }
+SRBindData::SRBindData(string file_name, int sheet_index)
+    : xlsx_file(file_name), xlsx_sheet(make_uniq<XlsxSheet>(xlsx_file.getSheet(sheet_index))),
+      number_threads(DefaultThreads()) {
+}
 
-SRScanGlobalState::SRScanGlobalState(ClientContext &context, const SRScanData &bind_data)
+SRGlobalState::SRGlobalState(ClientContext &context, const SRBindData &bind_data)
     : bind_data(bind_data), chunk_count(0) {
 }
 
-SRScanLocalState::SRScanLocalState(ClientContext &context, SRScanGlobalState &gstate)
-    : scan_count(0), bind_data(gstate.bind_data) {
-}
-
-idx_t SRScanLocalState::ReadNextBatch(SRScanGlobalState &gstate) {
-	// TODO: Reset allocated memory from last batch
-
-	// Reset scan_count
-	scan_count = 0;
-
-	// TODO: Get next batch of data from SheetReader
-	GetNextBatchFromSR(gstate);
-
-	return scan_count;
-}
-
-void SRScanLocalState::GetNextBatchFromSR(SRScanGlobalState &gstate) {
-	if (gstate.chunk_count > 1) {
-		scan_count = 0;
-	}
-	scan_count = 2048;
+SRLocalState::SRLocalState(ClientContext &context, SRGlobalState &gstate) : bind_data(gstate.bind_data) {
 }
 
 SRGlobalTableFunctionState::SRGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input)
-    : state(context, input.bind_data->Cast<SRScanData>()) {
+    : state(context, input.bind_data->Cast<SRBindData>()) {
 }
 
 unique_ptr<GlobalTableFunctionState> SRGlobalTableFunctionState::Init(ClientContext &context,
                                                                       TableFunctionInitInput &input) {
-	auto &bind_data = input.bind_data->Cast<SRScanData>();
+
 	auto result = make_uniq<SRGlobalTableFunctionState>(context, input);
-	auto &gstate = result->state;
 
 	return std::move(result);
 }
 
-SRLocalTableFunctionState::SRLocalTableFunctionState(ClientContext &context, SRScanGlobalState &gstate)
+SRLocalTableFunctionState::SRLocalTableFunctionState(ClientContext &context, SRGlobalState &gstate)
     : state(context, gstate) {
 }
 
@@ -113,22 +103,11 @@ unique_ptr<LocalTableFunctionState> SRLocalTableFunctionState::Init(ExecutionCon
 	return std::move(result);
 }
 
-void FillChunk(DataChunk &output, idx_t scan_count) {
-	// TODO: Do speed test -- mayb SetValue is faster here?
+// =====================================
+// Following are definitions that are used to copy data from the sheetreader-core to the DuckDB data chunk
+// =====================================
 
-	// Fill the output chunk with data
-	// For now, we just fill it with dummy data
-	for (idx_t col = 0; col < output.ColumnCount(); col++) {
-		Vector &vec = output.data[col];
-		string_t *data = FlatVector::GetData<string_t>(vec);
-		// auto &validity = FlatVector::Validity(vec);
-		for (idx_t i = 0; i < scan_count; i++) {
-			string_t &tmp = data[i];
-			tmp = "Row: " + std::to_string(i);
-		}
-	}
-}
-
+//! DataPtr is a union that holds a pointer to the different data that are stored in the vectors of the data chunk
 union DataPtr {
 	string_t *string_data;
 	double *double_data;
@@ -136,104 +115,45 @@ union DataPtr {
 	date_t *date_data;
 };
 
-// TODO: import chrono
-inline void FinishChunk(DataChunk &output, idx_t cardinality, SRScanGlobalState &gstate,
-                        std::chrono::time_point<std::chrono::system_clock> start_time_copy_chunk,
-                        bool print_time = false) {
-	// Set the validity of the output chunk
-	// TODO: What do we get with this?
-	// for (idx_t col = 0; col < output.ColumnCount(); col++) {
-	// 	Vector &vec = output.data[col];
-	//
-	// 	vec.Verify(scan_count);
-	// }
-	output.SetCardinality(cardinality);
-
-	std::chrono::time_point<std::chrono::system_clock> finish_time_copy_chunk = std::chrono::system_clock::now();
-	std::chrono::duration<double> elapsed_seconds_chunk = finish_time_copy_chunk - start_time_copy_chunk;
-	gstate.times_copy.push_back(elapsed_seconds_chunk.count());
-
-	if (cardinality == 0 && print_time) {
-		gstate.finish_time_copy = std::chrono::system_clock::now();
-		std::chrono::duration<double> elapsed_seconds = gstate.finish_time_copy - gstate.start_time_copy;
-		std::cout << "Copy time: " << elapsed_seconds.count() << "s" << std::endl;
-
-		double sum = 0;
-		for (auto &time : gstate.times_copy) {
-			sum += time;
-		}
-		std::cout << "Pure Copy time: " << sum << "s" << std::endl;
-	}
-	gstate.chunk_count++;
-	return;
-}
-
-inline void SetRow(const SRScanData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors,
-                   vector<XlsxCell> &row_values, idx_t row_id) {
-
-	auto &xlsx_file = bind_data.xlsx_file;
-
-	for (idx_t j = 0; j < bind_data.types.size(); j++) {
-		switch (bind_data.types[j].id()) {
-		case LogicalTypeId::VARCHAR: {
-			auto value = xlsx_file.getString(row_values[j].data.integer);
-			// string_t creates values that fail the UTF-8 check, so we use the unperformant technique
-			// flat_vectors[j].string_data[i] = string_t(value);
-			output.data[j].SetValue(row_id, Value(value));
-			break;
-		}
-		case LogicalTypeId::DOUBLE: {
-			auto value = row_values[j].data.real;
-			flat_vectors[j].double_data[row_id] = value;
-			break;
-		}
-		case LogicalTypeId::BOOLEAN: {
-			auto value = row_values[j].data.boolean;
-			flat_vectors[j].bool_data[row_id] = value;
-			break;
-		}
-		case LogicalTypeId::DATE: {
-			date_t value = date_t((int)(row_values[j].data.real / 86400.0));
-			flat_vectors[j].date_data[row_id] = value;
-			break;
-		}
-		default:
-			throw InternalException("This shouldn't happen. Unsupported Logical type");
-		}
-	}
-}
-
-inline void SetNull(const SRScanData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors, const XlsxCell &cell,
+//! Set cell to NULL
+inline void SetNull(const SRBindData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors, const XlsxCell &cell,
                     idx_t row_id, idx_t column_id) {
-	// Set cell to NULL
 	LogicalType expected_type = bind_data.types[column_id];
+
+	// Value constructor with LogicalType sets the value to NULL
 	output.data[column_id].SetValue(row_id, Value(expected_type));
 }
 
+//! Set all values in the data chunk to NULL
 inline void SetAllInvalid(DataChunk &output, idx_t cardinality) {
+	// Iterate over all columns
 	for (idx_t col = 0; col < output.ColumnCount(); col++) {
 		Vector &vec = output.data[col];
+		// Validity mask saves the information about NULL values
 		auto &validity = FlatVector::Validity(vec);
 		validity.SetAllInvalid(cardinality);
 	}
 }
 
-inline void SetCell(const SRScanData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors, const XlsxCell &cell,
+//! Set cell to the value of XlsxCell
+//! Expects XlsxCell to have the same type as the column
+inline void SetCell(const SRBindData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors, const XlsxCell &cell,
                     idx_t row_id, idx_t column_id) {
 
 	auto &xlsx_file = bind_data.xlsx_file;
 
-	// TODO: [IMPORTANT] Check whether cell is null and maybe if compatible with column type
-
-	// TODO: Maybe get validity masks with flat_vectors, so we don't have to get it here for every cell
+	// Get validity mask of the column and set it to valid (i.e. not NULL)
 	Vector &vec = output.data[column_id];
 	auto &validity = FlatVector::Validity(vec);
 	validity.SetValid(row_id);
 
+	// Set the value of the cell to cell in the data chunk
+	// Note: bind_data.types[column_id] is the expected type of the column,
+	// so the type XlsxCell should be checked before calling this function
 	switch (bind_data.types[column_id].id()) {
 	case LogicalTypeId::VARCHAR: {
 		auto value = xlsx_file.getString(cell.data.integer);
-		// string_t creates values that fail the UTF-8 check, so we use the unperformant technique
+		// string_t creates values that fail the UTF-8 check, so we use the slow technique
 		// flat_vectors[j].string_data[i] = string_t(value);
 		output.data[column_id].SetValue(row_id, Value(value));
 		break;
@@ -249,6 +169,7 @@ inline void SetCell(const SRScanData &bind_data, DataChunk &output, vector<DataP
 		break;
 	}
 	case LogicalTypeId::DATE: {
+		// Convert seconds to days
 		date_t value = date_t((int)(cell.data.real / 86400.0));
 		flat_vectors[column_id].date_data[row_id] = value;
 		break;
@@ -258,16 +179,19 @@ inline void SetCell(const SRScanData &bind_data, DataChunk &output, vector<DataP
 	}
 }
 
-inline void SetCellString(const SRScanData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors,
+//! Coerce cell to string and save it in the data chunk
+inline void SetCellString(const SRBindData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors,
                           const XlsxCell &cell, idx_t row_id, idx_t column_id) {
 
 	auto &xlsx_file = bind_data.xlsx_file;
 
-	// TODO: Maybe get validity masks with flat_vectors, so we don't have to get it here for every cell
+	// Get validity mask of the column and set it to valid (i.e. not NULL)
 	Vector &vec = output.data[column_id];
 	auto &validity = FlatVector::Validity(vec);
 	validity.SetValid(row_id);
 
+	// Similar to SetCell() only difference:
+	// Use coercion method depending on the type of the XlsxCell
 	switch (cell.type) {
 	case CellType::T_STRING_REF: {
 		auto value = xlsx_file.getString(cell.data.integer);
@@ -276,7 +200,6 @@ inline void SetCellString(const SRScanData &bind_data, DataChunk &output, vector
 	}
 	case CellType::T_NUMERIC: {
 		auto value = cell.data.real;
-		// Convert value to String
 		string str = std::to_string(value);
 		output.data[column_id].SetValue(row_id, Value(str));
 		break;
@@ -298,6 +221,8 @@ inline void SetCellString(const SRScanData &bind_data, DataChunk &output, vector
 	}
 }
 
+//! Check if the types of the XlsxCell and the column are compatible
+//! Types are compatible with VARCHAR if coercing to string is enabled
 bool TypesCompatible(const LogicalType &expected_type, const CellType &cell_type, bool coerce_to_string) {
 	switch (expected_type.id()) {
 	case LogicalTypeId::VARCHAR:
@@ -320,36 +245,61 @@ bool TypesCompatible(const LogicalType &expected_type, const CellType &cell_type
 	case LogicalTypeId::DATE:
 		return cell_type == CellType::T_DATE;
 	default:
+		// TODO: Add support for T_STRING and T_STRING_INLINE
 		throw InternalException("This shouldn't happen. Unsupported Logical type");
 	}
 }
 
-bool CheckRowLimitReached(SRScanGlobalState &gstate) {
+//! Check if current_row is within the limit of the current chunk
+bool CheckRowLimitReached(SRGlobalState &gstate) {
+	// Need offset, since current_row is index of the current row in whole table.
+	// So we subtract the number of rows (determined by chunk) already copied
 	long long row_offset = gstate.chunk_count * STANDARD_VECTOR_SIZE;
+	// Limit is the last row of the current chunk (should be 2048 == STANDARD_VECTOR_SIZE)
 	long long limit = row_offset + STANDARD_VECTOR_SIZE;
 	long long skipRows = gstate.bind_data.xlsx_sheet->mSkipRows;
-	bool limit_reached = gstate.currentRow - skipRows >= limit;
+	bool limit_reached = gstate.current_row - skipRows >= limit;
 	return limit_reached;
 }
 
-idx_t GetCardinality(SRScanGlobalState &gstate) {
+//! Get the number of rows copied so far
+idx_t GetCardinality(SRGlobalState &gstate) {
+	// Same reason as in CheckRowLimitReached
 	long long row_offset = gstate.chunk_count * STANDARD_VECTOR_SIZE;
 	long long skipRows = gstate.bind_data.xlsx_sheet->mSkipRows;
 	// This is the case when no new rows are copied and last chunk was not full (last iteration)
-	if (gstate.currentRow + 1 < skipRows + row_offset) {
+	if (gstate.current_row + 1 < skipRows + row_offset) {
 		return 0;
 	}
-	return gstate.currentRow - skipRows - row_offset + 1;
+	return gstate.current_row - skipRows - row_offset + 1;
 }
 
-//! Assume that types of XlsxCells align with the types of the columns
-//! Returns Cardinality (number of rows copied)
-size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataChunk &output,
-                  vector<DataPtr> &flat_vectors) {
+/*!
+  Summary of data is stored in mCells:
+    ====================================
 
-	auto &fsheet = bind_data.xlsx_sheet;
+    General layout:
+    ---------------
 
-	D_ASSERT(bind_data.number_threads == fsheet->mCells.size());
+  mCells = [thread[0], thread[1], thread[2], ...]
+  thread[current_thread] = [buffer[0], buffer[1], buffer[2], ...]
+  buffer[current_buffer] = [cell[0], cell[1], cell[2], ...]
+*/
+/*!
+   - Copy data from sheetreader-core's mCells to DuckDB data chunk
+   - Copies STANDARD_VECTOR_SIZE rows at a time
+   - This function is stateful, so it keeps track of the current location in the mCells
+     to maintain state between calls
+   Returns Cardinality (number of rows copied)
+*/
+size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChunk &output,
+                    vector<DataPtr> &flat_vectors) {
+
+	auto &sheet = bind_data.xlsx_sheet;
+
+	// Every thread has a list of buffers
+	D_ASSERT(bind_data.number_threads == sheet->mCells.size());
+
 	idx_t number_threads = bind_data.number_threads;
 
 	if (number_threads == 0) {
@@ -357,152 +307,201 @@ size_t UnsafeCopy(SRScanGlobalState &gstate, const SRScanData &bind_data, DataCh
 	}
 
 	size_t row_offset = gstate.chunk_count * STANDARD_VECTOR_SIZE;
+
+	// Helper function to calculate the adjusted row
 	auto calcAdjustedRow = [row_offset](long long currentRow, unsigned long skip_rows) {
 		return currentRow - skip_rows - row_offset;
 	};
 
-	// Initialize state
-	if (gstate.currentLocs.size() == 0) {
+	// Initialize state for first call
+	if (gstate.current_locs.size() == 0) {
 		// Get number of buffers from first thread (is always the maximum)
-		gstate.maxBuffers = fsheet->mCells[0].size();
-		gstate.currentBuffer = 0;
-		gstate.currentThread = 0;
-		gstate.currentCell = 0;
-		gstate.currentColumn = 0;
-		gstate.currentRow = -1;
-		gstate.currentLocs = std::vector<size_t>(number_threads, 0);
+		gstate.max_buffers = sheet->mCells[0].size();
+		gstate.current_thread = 0;
+		gstate.current_buffer = 0;
+		gstate.current_cell = 0;
+		gstate.current_column = 0;
+		gstate.current_row = -1;
+		// Initialize current_locs for all threads
+		gstate.current_locs = std::vector<size_t>(number_threads, 0);
 	}
 
-	// Set all values to NULL per default (sheetreader-core doesn't store information about empty cells)
+	// Set all values to NULL per default, since sheetreader-core stores information about empty cells only by skipping
+	// them in mCells. Since we iterate over mCells, empty cells are implicitly skipped. So we wouldn't know if a cell
+	// in the chunk is empty if we don't set it to NULL here and set it to valid when we find it in mCells (see
+	// SetValue)
 	SetAllInvalid(output, STANDARD_VECTOR_SIZE);
 
-	//! To get the correct order of rows we iterate for(buffer_index) { for(thread_index) { ... } }
+	//! To get the correct order of rows we iterate for(buffer_index) { for(thread_index) { for(cell_index) } }
 	//! This is due to how sheetreader-core writes the data to the buffers (stored in mCells)
-	for (; gstate.currentBuffer < gstate.maxBuffers; ++gstate.currentBuffer) {
-		for (; gstate.currentThread < fsheet->mCells.size(); ++gstate.currentThread) {
+	for (; gstate.current_buffer < gstate.max_buffers; ++gstate.current_buffer) {
+		for (; gstate.current_thread < sheet->mCells.size(); ++gstate.current_thread) {
 
-			// If there are no more buffers to read, return last row and prepare for finishing copy
-			if (fsheet->mCells[gstate.currentThread].size() == 0) {
+			// If there are no more buffers to read, prepare for finishing copying
+			if (sheet->mCells[gstate.current_thread].size() == 0) {
 				// Set to maxBuffers, so this is the last iteration
-				gstate.currentBuffer = gstate.maxBuffers;
+				gstate.current_buffer = gstate.max_buffers;
 
+				// Return number of copied rows in this chunk
 				return GetCardinality(gstate);
 			}
 
-			//! Get current cell buffer
-			const std::vector<XlsxCell> cells = fsheet->mCells[gstate.currentThread].front();
+			//! Current cell buffer
+			const std::vector<XlsxCell> cells = sheet->mCells[gstate.current_thread].front();
 			//! Location info for current thread
-			const std::vector<LocationInfo> &locs_infos = fsheet->mLocationInfos[gstate.currentThread];
-			//! Current location index
-			size_t &currentLoc = gstate.currentLocs[gstate.currentThread];
+			const std::vector<LocationInfo> &locs_infos = sheet->mLocationInfos[gstate.current_thread];
+			//! Current location index in current thread
+			size_t &current_loc = gstate.current_locs[gstate.current_thread];
 
-			// TODO: Check when this is the case
+			// This is a weird implementation detail of sheetreader-core:
 			// currentCell <= cells.size() because there might be location info after last cell
-			for (; gstate.currentCell <= cells.size(); ++gstate.currentCell) {
+			for (; gstate.current_cell <= cells.size(); ++gstate.current_cell) {
 
-				// if (get_next_row) {
-				// 	break;
-				// }
-
-				// Update currentRow & currentColumn when location info is available for current cell at currentLoc
-				// After setting those values: Advance to next location info
+				// Description of the following loop:
+				// Update currentRow & currentColumn when location info is available for current cell at currentLoc.
+				// After setting those values: Advance to next location info.
 				//
 				// This means that the values won't be updated if there is no location info for the current cell
 				// (e.g. not first cell in row)
 				//
+				// Edge case 0:
 				// Loop is executed n+1 times for first location info, where n is the number of skip_rows (specified as
-				// parameter for interleaved) This is because, sheetreader creates location infoes for the skipped lines
+				// parameter for interleaved) This is because, SheetReader creates location infos for the skipped lines
 				// with cell == column == buffer == 0 sames as for the first "real" row
-				while (currentLoc < locs_infos.size() && locs_infos[currentLoc].buffer == gstate.currentBuffer &&
-				       locs_infos[currentLoc].cell == gstate.currentCell) {
+				//
+				// Edge case 1:
+				// For empty cells, sheetreader-core also generates a location info that points to the same cell as the
+				// next location info. By using the condition for the while loop, we skip these empty cells
+				while (current_loc < locs_infos.size() && locs_infos[current_loc].buffer == gstate.current_buffer &&
+				       locs_infos[current_loc].cell == gstate.current_cell) {
 
-					gstate.currentColumn = locs_infos[currentLoc].column;
-					if (locs_infos[currentLoc].row == -1ul) {
-						++gstate.currentRow;
+					gstate.current_column = locs_infos[current_loc].column;
+					// Not sure whether row is ever -1ul, but this is how it's handled in sheetreader-core's nextRow()
+					if (locs_infos[current_loc].row == -1ul) {
+						++gstate.current_row;
 					} else {
-						gstate.currentRow = locs_infos[currentLoc].row;
+						gstate.current_row = locs_infos[current_loc].row;
 					}
 
-					// TODO: Check how expensive lambda call is
-					long long adjustedRow = calcAdjustedRow(gstate.currentRow, fsheet->mSkipRows);
+					long long adjusted_row = calcAdjustedRow(gstate.current_row, sheet->mSkipRows);
+
 					// This only happens for header rows -- we want to skip them
-					if (adjustedRow < 0) {
-						++currentLoc;
+					if (adjusted_row < 0) {
+						++current_loc;
 						// Skip to next row
-						if (currentLoc < locs_infos.size()) {
-							gstate.currentCell = locs_infos[currentLoc].cell;
+						if (current_loc < locs_infos.size()) {
+							gstate.current_cell = locs_infos[current_loc].cell;
 						} else {
 							throw InternalException("Skipped more rows than available in first buffer -- consider "
 							                        "decreasing number of threads");
-							// No more location infos for this buffer
-							// TODO: Advance to next thread
-							// fsheet->mCells[gstate.currentThread].pop_front();
 						}
 						continue;
 					}
 
-					// Increment for next iteration
-					++currentLoc;
+					// Increment index to location info for next iteration
+					++current_loc;
 
+					// If we reached the row limit of the current chunk, we return the number of copied rows
 					if (CheckRowLimitReached(gstate)) {
+						// Subtract 1, because we increment current_row before checking the limit
 						return (GetCardinality(gstate) - 1);
 					}
 				}
-				// TODO: I think this can never be the case, since currentCell is not modified after loop check
-				if (gstate.currentCell >= cells.size())
+				// We need to check this here, because we iterate up to cells.size() to get the last location info
+				if (gstate.current_cell >= cells.size())
 					break;
-				const auto currentColumn = gstate.currentColumn;
+
+				// Use short variable name for better readability
+				const auto current_column = gstate.current_column;
+
 				// If this cell is in a column that was not present in the first row, we throw an error
-				// TODO: Can we resize the columns after bind?
-				// TODO: make columns user definable via named parameter
-				if (currentColumn >= bind_data.types.size()) {
-					// throw InvalidInputException("Row " + std::to_string(gstate.currentRow) +
-					//                             "has more columns than the first row: " +
-					//                             std::to_string(currentColumn + 1));
-					// currentRowData.resize(fsheet->mDimension.first - fsheet->mSkipColumns, XlsxCell());
-					std::cout << "Row " << gstate.currentRow
-					          << " has more columns than the first row: " << currentColumn + 1 << std::endl;
+				if (current_column >= bind_data.types.size()) {
+					throw InvalidInputException(
+					    "Row " + std::to_string(gstate.current_row) + "has more columns than the first row. Has: " +
+					    std::to_string(current_column + 1) + " Expected: " + std::to_string(bind_data.types.size()));
 				}
-				const XlsxCell &cell = cells[gstate.currentCell];
-				long long mSkipRows = fsheet->mSkipRows;
-				long long adjustedRow = calcAdjustedRow(gstate.currentRow, mSkipRows);
+
+				//! Content of current cell
+				const XlsxCell &cell = cells[gstate.current_cell];
+				//! Number of rows we skipped while parsing
+				long long mSkipRows = sheet->mSkipRows;
+				long long adjustedRow = calcAdjustedRow(gstate.current_row, mSkipRows);
 
 				bool types_compatible =
-				    TypesCompatible(bind_data.types[currentColumn], cell.type, bind_data.coerce_to_string);
+				    TypesCompatible(bind_data.types[current_column], cell.type, bind_data.coerce_to_string);
 
 				// sheetreader-core doesn't determine empty cells to be T_NONE, instead it skips the cell,
 				// so it's not stored in mCells. We handle this by setting all cells as Invalid (aka null)
 				// and set them valid when they appear in mCells
 				if (cell.type == CellType::T_NONE || cell.type == CellType::T_ERROR || !types_compatible) {
-					SetNull(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
-				} else if (bind_data.types[currentColumn] == LogicalType::VARCHAR && bind_data.coerce_to_string)
-				{
-					SetCellString(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
+					SetNull(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
+				} else if (bind_data.types[current_column] == LogicalType::VARCHAR && bind_data.coerce_to_string) {
+					SetCellString(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
 				} else {
-					SetCell(bind_data, output, flat_vectors, cell, adjustedRow, currentColumn);
+					SetCell(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
 				}
-				++gstate.currentColumn;
-			}
-			fsheet->mCells[gstate.currentThread].pop_front();
-			gstate.currentCell = 0;
-		}
-		gstate.currentThread = 0;
-		// }
 
-		// TODO: is there a case where currentRowData is not empty?
-		// const auto ret = std::pair<size_t, std::vector<XlsxCell>>(gstate.currentRow, currentRowData);
-		// gstate.currentRow = 0;
-		// return ret;
+				// Advance to next column
+				++gstate.current_column;
+			}
+
+			// If we reached the last cell in the current buffer, we remove it from the thread
+			sheet->mCells[gstate.current_thread].pop_front();
+			// Reset for next buffer
+			gstate.current_cell = 0;
+		}
+		// Reset thread index for next buffer index
+		gstate.current_thread = 0;
 	}
+	// Return number of copied rows in this chunk when all buffers are read (i.e. curren_buffer == max_buffers)
 	return GetCardinality(gstate);
 }
 
-inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+//! Finish the current chunk
+//! - Set the cardinality of the chunk
+//! - Store the time it took to copy the chunk
+//! - Increment the chunk count
+//! - Print the time it took to copy the chunk if print_time is true and last chunk is reached (cardinality == 0)
+inline void FinishChunk(DataChunk &output, idx_t cardinality, SRGlobalState &gstate,
+                        std::chrono::time_point<std::chrono::system_clock> start_time_copy_chunk,
+                        bool print_time = false) {
 
-	// Get the bind dataclass TARGET
-	const SRScanData &bind_data = data_p.bind_data->Cast<SRScanData>();
-	auto &gstate = data_p.global_state->Cast<SRGlobalTableFunctionState>().state;
-	auto &lstate = data_p.local_state->Cast<SRLocalTableFunctionState>().state;
+	// Indicate how many rows are in the chunk
+	// If cardinality is 0, it means that the chunk is empty and no more rows are to be expected
+	output.SetCardinality(cardinality);
+
+	// For benchmarking purposes, we store the time it took to copy the chunk
+	std::chrono::time_point<std::chrono::system_clock> finish_time_copy_chunk = std::chrono::system_clock::now();
+	std::chrono::duration<double> elapsed_seconds_chunk = finish_time_copy_chunk - start_time_copy_chunk;
+	gstate.times_copy.push_back(elapsed_seconds_chunk.count());
+
+	if (cardinality == 0 && print_time) {
+		gstate.finish_time_copy = std::chrono::system_clock::now();
+		std::chrono::duration<double> elapsed_seconds = gstate.finish_time_copy - gstate.start_time_copy;
+		std::cout << "Copy time: " << elapsed_seconds.count() << "s" << std::endl;
+
+		double sum = 0;
+		for (auto &time : gstate.times_copy) {
+			sum += time;
+		}
+		std::cout << "Pure Copy time: " << sum << "s" << std::endl;
+	}
+
+	// Increment number of chunks read so far
+	gstate.chunk_count++;
+
+	return;
+}
+
+//! Copy data from sheetreader-core to DuckDB data chunk
+//! - Is called after bind function
+//! - Is called multiple times until all data is copied are no more rows are needed (e.g. for LIMIT clause)
+inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+
+	//! Data from bind function
+	const SRBindData &bind_data = data_p.bind_data->Cast<SRBindData>();
+	//! State persisted in between table (copy) function calls
+	SRGlobalState &gstate = data_p.global_state->Cast<SRGlobalTableFunctionState>().state;
 
 	if (gstate.chunk_count == 0) {
 		gstate.start_time_copy = std::chrono::system_clock::now();
@@ -510,16 +509,22 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 
 	auto start_time_copy_chunk = std::chrono::system_clock::now();
 
-	auto &xlsx_file = bind_data.xlsx_file;
-	auto &fsheet = bind_data.xlsx_sheet;
+	//! Create alternative name for bind_data.xlsx_file for better readability
+	const XlsxFile &xlsx_file = bind_data.xlsx_file;
+	//! Create alternative name for bind_data.sheet for better readability
+	const unique_ptr<XlsxSheet> &sheet = bind_data.xlsx_sheet;
 
+	//! Number of columns (i.e. number of vectors in the data chunk)
 	const idx_t column_count = output.ColumnCount();
 
-	// Store FlatVectors for all columns (they have different data types)
-	vector<DataPtr> flat_vectors;
+	D_ASSERT(column_count == bind_data.types.size());
 
-	// Is this useful?
-	// data_ptr_t dataptr = output.data[0].GetData();
+	// =====================================
+	// Store FlatVectors for all columns (they have different data types)
+	// =====================================
+
+	//! Holds pointers to the data of the vectors in the data chunk
+	vector<DataPtr> flat_vectors;
 
 	for (idx_t col = 0; col < column_count; col++) {
 		switch (bind_data.types[col].id()) {
@@ -561,24 +566,83 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 		}
 	}
 
-	if (bind_data.version == 0) {
+	// =====================================
+	// Copy data from sheetreader-core's mCells to DuckDB data chunk
+	// =====================================
 
-		// Get the next batch of data from sheetreader
+	// Fastest and most versatile version is 3
+	if (bind_data.version == 1) {
+		// This version uses
+		// - SetValue() for all types
+		//   SetValue() is slower than directly writing to the flat vectors
+		// - nextRow() to get the XlsxCells from sheet.mCells()
+		//   This is slower than iterating over the buffers directly
+
 		idx_t i = 0;
-		for (; i < STANDARD_VECTOR_SIZE; i++) {
 
-			auto row = fsheet->nextRow();
+		// Get STANDARD_VECTOR_SIZE rows from sheetreader-core
+		for (; i < STANDARD_VECTOR_SIZE; i++) {
+			//! Get next row from sheetreader-core
+			auto row = sheet->nextRow();
 			if (row.first == 0) {
 				break;
 			}
 			auto &row_values = row.second;
 
-			// TODO: Check if types align
+			// Set contents of row
 			for (idx_t j = 0; j < column_count; j++) {
 				switch (bind_data.types[j].id()) {
 				case LogicalTypeId::VARCHAR: {
 					auto value = xlsx_file.getString(row_values[j].data.integer);
-					// string_t creates values that fail the UTF-8 check, so we use the unperformant technique
+					output.data[j].SetValue(i, Value(value));
+					break;
+				}
+				case LogicalTypeId::DOUBLE: {
+					auto value = row_values[j].data.real;
+					output.data[j].SetValue(i, Value(value));
+					break;
+				}
+				case LogicalTypeId::BOOLEAN: {
+					auto value = row_values[j].data.boolean;
+					output.data[j].SetValue(i, Value(value));
+					break;
+				}
+				case LogicalTypeId::DATE: {
+					date_t value = date_t((int)(row_values[j].data.real / 86400.0));
+					output.data[j].SetValue(i, Value::DATE(value));
+					break;
+				}
+				default:
+					throw InternalException("This shouldn't happen. Unsupported Logical type");
+				}
+			}
+		}
+
+		FinishChunk(output, i, gstate, start_time_copy_chunk);
+
+		return;
+
+	} else if (bind_data.version == 2) {
+		// This version uses
+		// - Uses SetValue only for VARCHAR, for other types it uses directly the flat vectors
+		// - nextRow() to get the XlsxCells from sheet.mCells()
+		//   This is slower than iterating over the buffers directly
+
+		// Get the next batch of data from sheetreader
+		idx_t i = 0;
+		for (; i < STANDARD_VECTOR_SIZE; i++) {
+
+			auto row = sheet->nextRow();
+			if (row.first == 0) {
+				break;
+			}
+			auto &row_values = row.second;
+
+			for (idx_t j = 0; j < column_count; j++) {
+				switch (bind_data.types[j].id()) {
+				case LogicalTypeId::VARCHAR: {
+					auto value = xlsx_file.getString(row_values[j].data.integer);
+					// string_t creates values that fail the UTF-8 check, so we use the slow technique
 					// flat_vectors[j].string_data[i] = string_t(value);
 					output.data[j].SetValue(i, Value(value));
 					break;
@@ -608,141 +672,14 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 
 		return;
 
-	} else if (bind_data.version == 1) {
-
-		// Get the next batch of data from sheetreader
-		idx_t i = 0;
-		for (; i < STANDARD_VECTOR_SIZE; i++) {
-			// TODO: fsheet is const due to bind_data being const. Maybe we should store the sheet in the local/global
-			// state?
-			auto row = fsheet->nextRow();
-			if (row.first == 0) {
-				break;
-			}
-			auto &row_values = row.second;
-
-			for (idx_t j = 0; j < column_count; j++) {
-				switch (bind_data.types[j].id()) {
-				case LogicalTypeId::VARCHAR: {
-					// TODO: Check if types align
-					auto value = xlsx_file.getString(row_values[j].data.integer);
-					output.data[j].SetValue(i, Value(value));
-					break;
-				}
-				case LogicalTypeId::DOUBLE: {
-					auto value = row_values[j].data.real;
-					output.data[j].SetValue(i, Value(value));
-					break;
-				}
-				case LogicalTypeId::BOOLEAN: {
-					auto value = row_values[j].data.boolean;
-					output.data[j].SetValue(i, Value(value));
-					break;
-				}
-				case LogicalTypeId::DATE: {
-					date_t value = date_t((int)(row_values[j].data.real / 86400.0));
-					output.data[j].SetValue(i, Value::DATE(value));
-					break;
-				}
-				default:
-					throw InternalException("This shouldn't happen. Unsupported Logical type");
-				}
-			}
-		}
-
-		FinishChunk(output, i, gstate, start_time_copy_chunk);
-
-		return;
-	} else if (bind_data.version == 2) {
-
-		// D_ASSERT(bind_data.number_threads == fsheet->mCells.size());
-		// idx_t number_threads = bind_data.number_threads;
-
-		// //! Row index in the current chunk
-		// size_t current_chunk_row = 0;
-
-		// if (number_threads == 0) {
-		// 	// TODO: Set Cardinality 0 etc.
-		// 	return std::make_pair(0, std::vector<XlsxCell>());
-		// }
-
-		// // Initialize state
-		// if (gstate.currentLocs.size() == 0) {
-		// 	// Get number of buffers from first thread (is always the maximum)
-		// 	gstate.maxBuffers = fsheet->mCells[0].size();
-		// 	gstate.currentBuffer = 0;
-		// 	gstate.currentThread = 0;
-		// 	gstate.currentCell = 0;
-		// 	gstate.currentColumn = 0;
-		// 	gstate.currentRow = -1;
-		// 	gstate.currentLocs = std::vector<size_t>(number_threads, 0);
-		// }
-
-		// std::vector<XlsxCell> currentValues;
-		// currentValues.resize(fsheet->mDimension.first - fsheet->mSkipColumns, XlsxCell());
-
-		// //! To get the correct order of rows we iterate for(buffer_index) { for(thread_index) { ... } }
-		// //! This is due to how sheetreader-core writes the data to the buffers (stored in mCells)
-		// for (; gstate.currentBuffer < gstate.maxBuffers; ++gstate.currentBuffer) {
-		// 	for (; gstate.currentThread < fsheet->mCells.size(); ++gstate.currentThread) {
-
-		// 		// If there are no more buffers to read, return last row and prepare for finishing copy
-		// 		if (fsheet->mCells[gstate.currentThread].size() == 0) {
-		// 			// Set to maxBuffers, so this is the last iteration
-		// 			gstate.currentBuffer = gstate.maxBuffers;
-		// 			// TODO: What's happening here?
-		// 			return std::pair<size_t, std::vector<XlsxCell>>(gstate.currentRow - 1, currentValues);
-		// 		}
-		// 		const std::vector<XlsxCell> cells = fsheet->mCells[gstate.currentThread].front();
-		// 		const std::vector<LocationInfo> &locs = fsheet->mLocationInfos[gstate.currentThread];
-		// 		size_t &currentLoc = gstate.currentLocs[gstate.currentThread];
-
-		// 		// currentCell <= cells.size() because there might be location info after last cell
-		// 		for (; gstate.currentCell <= cells.size(); ++gstate.currentCell) {
-		// 			while (currentLoc < locs.size() && locs[currentLoc].buffer == gstate.currentBuffer &&
-		// 			       locs[currentLoc].cell == gstate.currentCell) {
-		// 				gstate.currentColumn = locs[currentLoc].column;
-		// 				if (locs[currentLoc].row == -1ul) {
-		// 					++gstate.currentRow;
-		// 					++currentLoc;
-		// 					if (gstate.currentRow > 0)
-		// 						return std::pair<size_t, std::vector<XlsxCell>>(gstate.currentRow - 1, currentValues);
-		// 				} else if (static_cast<long long>(locs[currentLoc].row) > gstate.currentRow) {
-		// 					const size_t nextRow = locs[currentLoc].row;
-		// 					if (nextRow > static_cast<size_t>(gstate.currentRow + 1)) {
-		// 						++gstate.currentRow;
-		// 					} else {
-		// 						gstate.currentRow = locs[currentLoc].row;
-		// 						++currentLoc;
-		// 					}
-		// 					if (gstate.currentRow > 0)
-		// 						return std::pair<size_t, std::vector<XlsxCell>>(gstate.currentRow - 1, currentValues);
-		// 				} else {
-		// 					++currentLoc;
-		// 				}
-		// 			}
-		// 			if (gstate.currentCell >= cells.size())
-		// 				break;
-		// 			const auto adjustedColumn = gstate.currentColumn;
-		// 			++gstate.currentColumn;
-		// 			const XlsxCell &cell = cells[gstate.currentCell];
-		// 			currentValues[adjustedColumn] = cell;
-		// 		}
-		// 		fsheet->mCells[gstate.currentThread].pop_front();
-		// 		gstate.currentCell = 0;
-		// 	}
-		// 	gstate.currentThread = 0;
-		// }
-
-		// return std::pair<size_t, std::vector<XlsxCell>>(0, {});
-
-		// // Get the next batch of data from sheetreader
-		// idx_t i = 0;
-		// for (; i < STANDARD_VECTOR_SIZE; i++) {
-		// }
 	} else if (bind_data.version == 3) {
+		// This version:
+		// - Uses SetValue only for VARCHAR, for other types it uses directly the flat vectors
+		// - Doesn't use nextRow() but directly iterates over the buffers
+		// - Has more features (coercion to string, handling empty cells, etc.)
 
-		auto cardinality = UnsafeCopy(gstate, bind_data, output, flat_vectors);
+		//! Number of rows copied in this iteration
+		auto cardinality = StatefulCopy(gstate, bind_data, output, flat_vectors);
 
 		FinishChunk(output, cardinality, gstate, start_time_copy_chunk, bind_data.flag == 1);
 
@@ -750,15 +687,23 @@ inline void SheetreaderTableFun(ClientContext &context, TableFunctionInput &data
 	}
 }
 
+// =====================================
+// Following are definitions for the bind function
+// =====================================
+
+//! Converts the cell types from sheetreader-core to DuckDB types (column_types)
+//! and it also sets the column names (uses generic names)
 inline bool ConvertCellTypes(vector<LogicalType> &column_types, vector<string> &column_names,
-                             vector<CellType> &colTypesByIndex) {
-	idx_t column_index = 0;
+                             vector<CellType> &cell_types) {
+	idx_t current_column_index = 0;
+	//! Indicates if the first row contains only string values
 	bool first_row_all_string = true;
-	for (auto &colType : colTypesByIndex) {
+
+	for (auto &colType : cell_types) {
 		switch (colType) {
 		case CellType::T_STRING_REF:
 			column_types.push_back(LogicalType::VARCHAR);
-			column_names.push_back("String" + std::to_string(column_index));
+			column_names.push_back("String" + std::to_string(current_column_index));
 			break;
 		case CellType::T_STRING:
 		case CellType::T_STRING_INLINE:
@@ -767,65 +712,31 @@ inline bool ConvertCellTypes(vector<LogicalType> &column_types, vector<string> &
 			break;
 		case CellType::T_NUMERIC:
 			column_types.push_back(LogicalType::DOUBLE);
-			column_names.push_back("Numeric" + std::to_string(column_index));
+			column_names.push_back("Numeric" + std::to_string(current_column_index));
 			first_row_all_string = false;
 			break;
 		case CellType::T_BOOLEAN:
 			column_types.push_back(LogicalType::BOOLEAN);
-			column_names.push_back("Boolean" + std::to_string(column_index));
+			column_names.push_back("Boolean" + std::to_string(current_column_index));
 			first_row_all_string = false;
 			break;
 		case CellType::T_DATE:
-			// TODO: Fix date type
 			column_types.push_back(LogicalType::DATE);
-			column_names.push_back("Date" + std::to_string(column_index));
+			column_names.push_back("Date" + std::to_string(current_column_index));
 			first_row_all_string = false;
 			break;
 		default:
-			// TODO: Add specific column or data type
-			throw BinderException("Unknown cell type in column in column " + std::to_string(column_index));
+			throw BinderException("Unknown cell type in column in column " + std::to_string(current_column_index));
 		}
-		column_index++;
+		current_column_index++;
 	}
+
 	return first_row_all_string;
 }
 
-inline bool ConvertLogicTypes(vector<LogicalType> &column_types, vector<string> &column_names,
-                              vector<CellType> &cell_types) {
-	idx_t column_index = 0;
-	bool first_row_all_string = true;
-	for (auto &colType : column_types) {
-		switch (colType.id()) {
-		case LogicalTypeId::VARCHAR:
-			cell_types.push_back(CellType::T_STRING_REF);
-			column_names.push_back("String " + std::to_string(column_index));
-			break;
-		case LogicalTypeId::DOUBLE:
-			cell_types.push_back(CellType::T_NUMERIC);
-			column_names.push_back("Numeric " + std::to_string(column_index));
-			first_row_all_string = false;
-			break;
-		case LogicalTypeId::BOOLEAN:
-			cell_types.push_back(CellType::T_BOOLEAN);
-			column_names.push_back("Boolean " + std::to_string(column_index));
-			first_row_all_string = false;
-			break;
-		case LogicalTypeId::DATE:
-			// TODO: Fix date type
-			cell_types.push_back(CellType::T_DATE);
-			column_names.push_back("Date " + std::to_string(column_index));
-			first_row_all_string = false;
-			break;
-		default:
-			// TODO: Add specific column or data type
-			throw BinderException("Unsupported logical type in column in column " + std::to_string(column_index));
-		}
-		column_index++;
-	}
-	return first_row_all_string;
-}
-
-inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRScanData &bind_data) {
+//! Get the names of the columns from the first row
+//! Assumes that the first row contains only string values
+inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRBindData &bind_data) {
 
 	vector<string> column_names;
 
@@ -850,32 +761,43 @@ inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRScanData &bind_dat
 	return column_names;
 }
 
+//! Bind function for the sheetreader extension
+//! - Gets (named) parameters (filename etc.) of table function and stores them
+//! - Parses the .Xlsx-file
+//! - Reads the first row to determine the types of the columns
+//! - Reads the first row to determine the names of the columns (auto detects if the first row is a header)
+//! - Creates the bind data object (is subtype of FunctionData) which contains all necessary information for the copy
+//!   and most importantly stores the XlsxFile & XlsxSheet objects
 inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 
-	// Get the file names from the first parameter
-	// Note: GetFileList also checks if the files exist
+	// =====================================
+	// Get input parameters & prepare for parsing
+	// =====================================
 
-	// Old -- this was nice
-	// auto file_names = MultiFileReader::GetFileList(context, input.inputs[0], ".XLSX (Excel)");
-	// New (0.10.3) -- TODO: Is there a way to specify file type?
-	auto filereader = MultiFileReader::Create(input.table_function);
-	auto file_list = filereader->CreateFileList(context, input.inputs[0]);
+	// Get the file name from the input parameters & verify it exists
+	auto file_reader = MultiFileReader::Create(input.table_function);
+	auto file_list = file_reader->CreateFileList(context, input.inputs[0]);
 	auto file_names = file_list->GetAllFiles();
 
 	if (file_names.size() == 0) {
 		throw BinderException("No files found in path");
 	} else if (file_names.size() > 1) {
-		// TODO: Support multiple files
 		throw BinderException("Only one file can be read at a time");
 	}
 
+	//! User specified sheet name
 	string sheet_name;
+	//! User specified sheet index -- starts with 1
 	int sheet_index;
+	//! Is set when the user specifies the sheet index with e.g. `sheet_index=2`
 	bool sheet_index_set = false;
 
+	//! User specified option to use header
 	bool use_header = false;
 
+	// Get named parameters that are needed for creating XlsxFile & XlsxSheet objects and therefore for creating
+	// bind_data
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "sheet_name") {
@@ -894,44 +816,46 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		throw BinderException("Sheet index & sheet name cannot be set at the same time.");
 	}
 
-	// Create the bind data object and return it
-	unique_ptr<duckdb::SRScanData> bind_data;
+	//! Contains all important data collected in this bind function & is returned to be used by table (copy) function
+	unique_ptr<SRBindData> bind_data;
 
 	try {
 		if (!sheet_name.empty()) {
-			bind_data = make_uniq<SRScanData>(file_names[0], sheet_name);
+			bind_data = make_uniq<SRBindData>(file_names[0], sheet_name);
 		} else if (sheet_index_set) {
-			bind_data = make_uniq<SRScanData>(file_names[0], sheet_index);
+			bind_data = make_uniq<SRBindData>(file_names[0], sheet_index);
 		} else {
-			bind_data = make_uniq<SRScanData>(file_names[0]);
+			// Default: sheet_index=1
+			bind_data = make_uniq<SRBindData>(file_names[0]);
 		}
 	} catch (std::exception &e) {
 		throw BinderException(e.what());
 	}
 
-	// TODO: Do we need any information from info?
-	// TableFunctionInfo *info = input.info.get();
-
+	//! Is set when the user specifies the types of the columns with e.g. `types=[VARCHAR,DOUBLE]`
 	bool has_user_types = false;
 
-	// Here we could handle any named parameters
+	// Get all left named parameters
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "version") {
 			bind_data->version = IntegerValue::Get(kv.second);
 		} else if (loption == "threads") {
-			// TODO: Verfiy > 0
 			bind_data->number_threads = IntegerValue::Get(kv.second);
+			if (bind_data->number_threads <= 0) {
+				throw BinderException("Number of threads must be greater than 0");
+			}
 		} else if (loption == "flag") {
 			bind_data->flag = IntegerValue::Get(kv.second);
 		} else if (loption == "skip_rows") {
-			// TODO: Verfiy > 0
 			// Default: 0
 			bind_data->skip_rows = IntegerValue::Get(kv.second);
 		} else if (loption == "coerce_to_string") {
 			bind_data->coerce_to_string = BooleanValue::Get(kv.second);
 		} else if (loption == "types") {
+			// Get all types as strings defined in list/array
 			auto &children = ListValue::GetChildren(kv.second);
+			// Convert strings to LogicalTypes & check if they are supported
 			for (auto &child : children) {
 				string raw_type = StringValue::Get(child);
 				LogicalType logical_type = TransformStringToLogicalType(raw_type);
@@ -949,11 +873,12 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 					throw BinderException("Unsupported type \"%s\" for %s definition", raw_type, kv.first);
 				}
 				}
-
 				bind_data->user_types.push_back(logical_type);
 			}
+			// Indicate that user provided types
 			has_user_types = true;
 
+			// We already handled them before
 		} else if (loption == "sheet_name" || loption == "sheet_index" || loption == "has_header") {
 			continue;
 		} else {
@@ -972,68 +897,83 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		bind_data->xlsx_file.mParallelStrings = false;
 	}
 
-	auto start = std::chrono::system_clock::now();
+	// =====================================
+	// Parsing & check parsing result
+	// =====================================
 
+	//! Used for measuring time of parsing (for benchmarking)
+	auto start_parsing = std::chrono::system_clock::now();
+
+	// Parse the shared strings file
 	bind_data->xlsx_file.parseSharedStrings();
 
-	auto &fsheet = bind_data->xlsx_sheet;
+	//! Used for better readability
+	auto &sheet = bind_data->xlsx_sheet;
 
-	// TODO: Check in Clion what happens when mHeaders is set true
+	// Parse the sheet
+	bool success = sheet->interleaved(bind_data->skip_rows, 0, bind_data->number_threads);
 
-	bool success = fsheet->interleaved(bind_data->skip_rows, 0, bind_data->number_threads);
 	if (!success) {
 		throw BinderException("Failed to read sheet");
 	}
 
 	bind_data->xlsx_file.finalize();
 
-	auto end = std::chrono::system_clock::now();
-	std::chrono::duration<double> elapsed_seconds = end - start;
+	auto finished_parsing = std::chrono::system_clock::now();
+	std::chrono::duration<double> parsing_elapsed_seconds = finished_parsing - start_parsing;
+
+	// Used for benchmarking
 	if (bind_data->flag == 1) {
-		std::cout << "Parsing time time: " << elapsed_seconds.count() << "s" << std::endl;
+		std::cout << "Parsing time time: " << parsing_elapsed_seconds.count() << "s" << std::endl;
 	}
 
-	auto number_columns = fsheet->mDimension.first;
-	auto number_rows = fsheet->mDimension.second;
+	//! Number of columns in the sheet
+	auto number_columns = sheet->mDimension.first;
+	//! Number of rows in the sheet
+	auto number_rows = sheet->mDimension.second;
 
 	if (number_columns == 0 || number_rows == 0) {
 		throw BinderException("Sheet appears to be empty");
 	}
 
-	vector<CellType> colTypesByIndex_first_row;
-	vector<CellType> colTypesByIndex_second_row;
-	// Might be used if header is present
+	// =====================================
+	// Determine column types & names
+	// =====================================
+
+	//! Cell types in the first row after skipped rows
+	vector<CellType> cell_types_first_row;
+	//! Cell types in the second row after skipped rows
+	vector<CellType> cell_types_second_row;
+	//! Cell values in the first row after skipped rows
 	vector<XlsxCell> cells_first_row;
 
-	// Get types of columns
-	// TODO: This can fail if
-	// 1. The first row is empty
-	// 2. The first fow contains column names
-	// 3. number_columns < threads
-	auto first_buffer = &fsheet->mCells[0].front();
+	// First buffer of first thread
+	auto first_buffer = &sheet->mCells[0].front();
 
 	// Probing the first two rows to get the types
 	if (first_buffer->size() < number_columns * 2) {
-		throw BinderException(
-		    "Internal SheetReader extension error: Need minimum of two rows in first buffer to determine column types");
+		throw BinderException("Internal SheetReader extension error: Need minimum of two rows in first buffer to "
+		                      "determine column types and auto detect header row");
 	}
 
 	for (idx_t i = 0; i < number_columns; i++) {
-		colTypesByIndex_first_row.push_back(fsheet->mCells[0].front()[i].type);
-		cells_first_row.push_back(fsheet->mCells[0].front()[i]);
+		cell_types_first_row.push_back(sheet->mCells[0].front()[i].type);
+		cells_first_row.push_back(sheet->mCells[0].front()[i]);
 	}
 
 	for (idx_t i = number_columns; i < number_columns * 2; i++) {
-		colTypesByIndex_second_row.push_back(fsheet->mCells[0].front()[i].type);
+		cell_types_second_row.push_back(sheet->mCells[0].front()[i].type);
 	}
 
 	// Convert CellType to LogicalType
-	vector<LogicalType> column_types_first_row;
-	vector<string> column_names_first_row;
-	idx_t column_index = 0;
 
-	bool first_row_all_string =
-	    ConvertCellTypes(column_types_first_row, column_names_first_row, colTypesByIndex_first_row);
+	//! DuckDB types of the cells in the first row
+	vector<LogicalType> column_types_first_row;
+	//! Column names of the cells in the first row
+	vector<string> column_names_first_row;
+
+	// Check if first row contains only string values, get DuckDB types & generic column names
+	bool first_row_all_string = ConvertCellTypes(column_types_first_row, column_names_first_row, cell_types_first_row);
 
 	if (use_header && !first_row_all_string) {
 		throw BinderException("First row must contain only strings when has_header is set to true");
@@ -1041,18 +981,23 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	vector<LogicalType> column_types_second_row;
 	vector<string> column_names_second_row;
-	bool has_header = false;
+	//! Indicates whether a header row was detected
+	bool header_detected = false;
 
 	if (number_rows > 1) {
+		// Check if second row contains only string values, get DuckDB types & generic column names
 		bool second_row_all_string =
-		    ConvertCellTypes(column_types_second_row, column_names_second_row, colTypesByIndex_second_row);
+		    ConvertCellTypes(column_types_second_row, column_names_second_row, cell_types_second_row);
 
+		// If the first row contains only string values, but the second row doesn't, we assume that the first row is a header row
 		if (use_header || (first_row_all_string && !second_row_all_string)) {
-			has_header = true;
+			header_detected = true;
 
+			// Since the first row is a header row, we use the cell types of the second row
 			return_types = column_types_second_row;
 			bind_data->types = column_types_second_row;
 
+			//! Column names determined from the first row
 			vector<string> header_names;
 
 			// Get header names from cell values of first row
@@ -1073,27 +1018,39 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 					throw BinderException("Header row contains non-string values");
 				}
 			}
+
+			// Set column names to header names
 			names = header_names;
 			bind_data->names = header_names;
 		} else {
+			// If first row is not a header row, we use the cell types of the first row for the column types
 			return_types = column_types_first_row;
 			bind_data->types = column_types_first_row;
 
+			// Use generic column names
 			names = column_names_first_row;
 			bind_data->names = column_names_first_row;
 		}
 	}
 
+	// Since header is only used for determining column names, we skip it
+	if (header_detected) {
+		bind_data->skip_rows++;
+		bind_data->xlsx_sheet->mSkipRows++;
+	}
+
+	// If user has specified types, we try to use them
 	if (has_user_types) {
 		if (bind_data->user_types.size() < number_columns) {
 			throw BinderException("Number of user defined types is less than number of columns in sheet");
 		}
 
-		// TODO: Check compatibility with return_types
 		idx_t column_index = 0;
 		for (auto &column_type : return_types) {
+
 			LogicalType user_type = bind_data->user_types[column_index];
 
+			// Check if user defined type is same as previously determined column type or can be coerced to string
 			if (user_type.id() != column_type.id() &&
 			    !(user_type == LogicalTypeId::VARCHAR && bind_data->coerce_to_string)) {
 				// TODO: Fix
@@ -1120,18 +1077,13 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 		// Concat additional column names
 		bind_data->names.insert(bind_data->names.end(), additional_column_names.begin(), additional_column_names.end());
 		names = bind_data->names;
+
+		D_ASSERT(return_types.size() == names.size());
 	}
 
-	if (has_header) {
-		bind_data->skip_rows++;
-		// TODO: Check whether this is correct
-		bind_data->xlsx_sheet->mSkipRows++;
-	}
-
-	// First row is discarded
-	// TODO: Remove when not using nextRow() anymore
+	// First row is discarded (is only needed for versions that use nextRow())
 	for (idx_t i = 0; i < bind_data->skip_rows; i++) {
-		fsheet->nextRow();
+		sheet->nextRow();
 	}
 
 	return std::move(bind_data);
@@ -1139,10 +1091,11 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register a table function
-	TableFunction sheetreader_table_function("sheetreader", {LogicalType::VARCHAR}, SheetreaderTableFun,
+	TableFunction sheetreader_table_function("sheetreader", {LogicalType::VARCHAR}, SheetreaderCopyTableFun,
 	                                         SheetreaderBindFun, SRGlobalTableFunctionState::Init,
 	                                         SRLocalTableFunctionState::Init);
 
+	// Define all named parameters
 	sheetreader_table_function.named_parameters["sheet_name"] = LogicalType::VARCHAR;
 	sheetreader_table_function.named_parameters["sheet_index"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["version"] = LogicalType::INTEGER;

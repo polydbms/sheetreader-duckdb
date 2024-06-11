@@ -20,28 +20,18 @@ public:
 	std::string Name() override;
 };
 
-//! We call this ScanData analog to the JSONScanData -- BindData would be a better name
-// TODO: Or should this renamed to SRReadData as in ReadCSVData?
-struct SRScanData : public TableFunctionData {
+//! Contains all data that is determined during the bind function
+struct SRBindData : public TableFunctionData {
 public:
 	//! File name with path to file
 	//! Sheet ID default is 1
-	SRScanData(string file_name);
+	SRBindData(string file_name);
 	//! File name with path to file and name of sheet
 	//! Throws exception if sheet name is not found
-	SRScanData(string file_name, string sheet_name);
+	SRBindData(string file_name, string sheet_name);
 	//! File name with path to file and index of sheet (starts with 1)
 	//! Throws exception if sheet at index is not found
-	SRScanData(string file_name, int sheet_index);
-
-	// void Bind(ClientContext &context, TableFunctionBindInput &input);
-
-	// void InitializeReaders(ClientContext &context);
-	// void InitializeFormats();
-	// void InitializeFormats(bool auto_detect);
-	// void SetCompression(const string &compression);
-
-	// static unique_ptr<SheetreaderScanData> Deserialize(Deserializer &deserializer);
+	SRBindData(string file_name, int sheet_index);
 
 public:
 	//! The paths of the files we're reading
@@ -56,13 +46,15 @@ public:
 	//! All column DuckDB types (in order)
 	vector<LogicalType> types;
 
+	//! The .XLSX-file -- created by sheetreader-core
 	XlsxFile xlsx_file;
+	//! A sheet of xlsx_file -- created by sheetreader-core
 	unique_ptr<XlsxSheet> xlsx_sheet;
 
-	// TODO: Which default value should be used?
+	//! Number of threads used while parsing
 	idx_t number_threads = 1;
 
-	// TODO: Which default value should be used?
+	//! Number of rows to skip while parsing
 	idx_t skip_rows = 0;
 
 	idx_t flag = 0;
@@ -77,67 +69,69 @@ public:
 	std::chrono::time_point<std::chrono::system_clock> finish_time_parsing;
 
 private:
-	SRScanData(ClientContext &context, vector<string> file_names, string sheet_name);
+	SRBindData(ClientContext &context, vector<string> file_names, string sheet_name);
 };
-struct SRScanGlobalState {
+//! Keeps state in between calls to the table (copy) function
+struct SRGlobalState {
 public:
-	SRScanGlobalState(ClientContext &context, const SRScanData &bind_data);
+	SRGlobalState(ClientContext &context, const SRBindData &bind_data);
 
 public:
 
 	//! Bound data
-	const SRScanData &bind_data;
+	const SRBindData &bind_data;
 
-	//! Number of reads so far
+	//! Number of chunk read so far
 	idx_t chunk_count = 0;
 
+	//! Start time of current chunk
 	std::chrono::time_point<std::chrono::system_clock> start_time_copy;
+	//! Finish time of current chunk
 	std::chrono::time_point<std::chrono::system_clock> finish_time_copy;
+	//! Copy times of all chunks
 	vector<double> times_copy = {};
 
 	//! State of copying from mCells
-	size_t maxBuffers;
-	size_t currentBuffer;
-	size_t currentThread;
-	size_t currentCell;
-	unsigned long currentColumn;
-	long long currentRow;
-	std::vector<size_t> currentLocs;
+	size_t max_buffers;
+	//! Current index of thread
+	size_t current_thread;
+	//! Current index of buffer in thread
+	size_t current_buffer;
+	//! Current index of cell in buffer
+	size_t current_cell;
+	//! Current index of column in row
+	unsigned long current_column;
+	//! Current index of row in sheet
+	long long current_row;
+	//! Current index of row per thread
+	std::vector<size_t> current_locs;
 };
 
-struct SRScanLocalState {
+struct SRLocalState {
 public:
-	SRScanLocalState(ClientContext &context, SRScanGlobalState &gstate);
-
-public:
-	//! Get next batch of data and return number of rows gathered
-	idx_t ReadNextBatch(SRScanGlobalState &gstate);
-	void GetNextBatchFromSR(SRScanGlobalState &gstate);
-
-public:
-	//! Current scan data
-	idx_t scan_count;
+	SRLocalState(ClientContext &context, SRGlobalState &gstate);
 
 private:
-	const SRScanData &bind_data;
+	const SRBindData &bind_data;
 };
 
+//! Contains SRGlobalState
 struct SRGlobalTableFunctionState : public GlobalTableFunctionState {
 public:
 	SRGlobalTableFunctionState(ClientContext &context, TableFunctionInitInput &input);
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input);
 
 public:
-	SRScanGlobalState state;
+	SRGlobalState state;
 };
 
 struct SRLocalTableFunctionState : public LocalTableFunctionState {
 public:
-	SRLocalTableFunctionState(ClientContext &context, SRScanGlobalState &gstate);
+	SRLocalTableFunctionState(ClientContext &context, SRGlobalState &gstate);
 	static unique_ptr<LocalTableFunctionState> Init(ExecutionContext &context, TableFunctionInitInput &input,
 	                                                GlobalTableFunctionState *global_state);
 
 public:
-	SRScanLocalState state;
+	SRLocalState state;
 };
 } // namespace duckdb
