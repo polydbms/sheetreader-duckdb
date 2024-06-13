@@ -618,7 +618,7 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 			}
 		}
 
-		FinishChunk(output, i, gstate, start_time_copy_chunk);
+		FinishChunk(output, i, gstate, start_time_copy_chunk, bind_data.flag == 1);
 
 		return;
 
