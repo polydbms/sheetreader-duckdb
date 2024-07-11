@@ -101,6 +101,8 @@ D CREATE TABLE test AS FROM sheetreader('test.xlsx',
 
 ## Building yourself
 
+First, clone this repository with the `--recurse-submodules` flag --- so you get all the needed source files. 
+
 To build the extension, run:
 ```sh
 GEN=ninja make
