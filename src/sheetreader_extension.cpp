@@ -765,8 +765,9 @@ inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRBindData &bind_dat
 //! Bind function for the sheetreader extension
 //! - Gets (named) parameters (filename etc.) of table function and stores them
 //! - Parses the .Xlsx-file
-//! - Reads the first row to determine the types of the columns
-//! - Reads the first row to determine the names of the columns (auto detects if the first row is a header)
+//! - Reads the first & second row to determine the types of the columns
+//! - Reads the first & second row to determine the names of the columns (auto detects if the first row is a header)
+//! - Writes the determined types in `return_types` and the names in `names`
 //! - Creates the bind data object (is subtype of FunctionData) which contains all necessary information for the copy
 //!   and most importantly stores the XlsxFile & XlsxSheet objects
 inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, TableFunctionBindInput &input,
@@ -1059,11 +1060,11 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			// If forced_types == true, the compatibility check is skipped
 			if (!bind_data->force_types && user_type.id() != column_type.id() &&
 			    !(user_type == LogicalTypeId::VARCHAR && bind_data->coerce_to_string)) {
-				// TODO: Fix
-				// throw BinderException("User defined type %s for column with index %d is not compatible with %s",
+				// TODO: EnumUtil does not work -- find appropriate replacement
+				// throw BinderException("User defined type %s for column with index %d is not compatible with actual type %s",
 				//                       EnumUtil::ToString<LogicalType>(user_type), column_index,
 				//                       EnumUtil::ToString<LogicalType>(column_type));
-				throw BinderException("User defined type  for column with index %d is not compatible with",
+				throw BinderException("User defined type for column with index %d is not compatible with actual type",
 				                      column_index);
 			}
 			column_index++;
@@ -1110,7 +1111,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	sheetreader_table_function.named_parameters["skip_rows"] = LogicalType::INTEGER;
 	sheetreader_table_function.named_parameters["has_header"] = LogicalType::BOOLEAN;
 	// TODO: Support STRUCT, i.e. { 'column_name': 'type', ... }
-	// We use ANY here, similar to read_csv.cpp, but we expect a STRUCT or LIST
+	// We would use ANY here, similar to read_csv.cpp, but we expect a STRUCT or LIST
 	// sheetreader_table_function.named_parameters["types"] = LogicalType::ANY;
 	sheetreader_table_function.named_parameters["types"] = LogicalType::LIST(LogicalType::VARCHAR);
 	sheetreader_table_function.named_parameters["force_types"] = LogicalType::BOOLEAN;
