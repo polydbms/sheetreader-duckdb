@@ -257,8 +257,8 @@ bool CheckRowLimitReached(SRGlobalState &gstate) {
 	long long row_offset = gstate.chunk_count * STANDARD_VECTOR_SIZE;
 	// Limit is the last row of the current chunk (should be 2048 == STANDARD_VECTOR_SIZE)
 	long long limit = row_offset + STANDARD_VECTOR_SIZE;
-	long long skipRows = gstate.bind_data.xlsx_sheet->mSkipRows;
-	bool limit_reached = gstate.current_row - skipRows >= limit;
+	long long skip_rows = gstate.bind_data.xlsx_sheet->mSkipRows;
+	bool limit_reached = gstate.current_row - skip_rows >= limit;
 	return limit_reached;
 }
 
@@ -266,12 +266,12 @@ bool CheckRowLimitReached(SRGlobalState &gstate) {
 idx_t GetCardinality(SRGlobalState &gstate) {
 	// Same reason as in CheckRowLimitReached
 	long long row_offset = gstate.chunk_count * STANDARD_VECTOR_SIZE;
-	long long skipRows = gstate.bind_data.xlsx_sheet->mSkipRows;
+	long long skip_rows = gstate.bind_data.xlsx_sheet->mSkipRows;
 	// This is the case when no new rows are copied and last chunk was not full (last iteration)
-	if (gstate.current_row + 1 < skipRows + row_offset) {
+	if (gstate.current_row + 1 < skip_rows + row_offset) {
 		return 0;
 	}
-	return gstate.current_row - skipRows - row_offset + 1;
+	return gstate.current_row - skip_rows - row_offset + 1;
 }
 
 /*!
@@ -309,12 +309,12 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 	size_t row_offset = gstate.chunk_count * STANDARD_VECTOR_SIZE;
 
 	// Helper function to calculate the adjusted row
-	auto calcAdjustedRow = [row_offset](long long currentRow, unsigned long skip_rows) {
-		return currentRow - skip_rows - row_offset;
+	auto calc_adjusted_row = [row_offset](long long current_row, unsigned long skip_rows) {
+		return current_row - skip_rows - row_offset;
 	};
 
 	// Initialize state for first call
-	if (gstate.current_locs.size() == 0) {
+	if (gstate.current_locs.empty()) {
 		// Get number of buffers from first thread (is always the maximum)
 		gstate.max_buffers = sheet->mCells[0].size();
 		gstate.current_thread = 0;
@@ -338,7 +338,7 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 		for (; gstate.current_thread < sheet->mCells.size(); ++gstate.current_thread) {
 
 			// If there are no more buffers to read, prepare for finishing copying
-			if (sheet->mCells[gstate.current_thread].size() == 0) {
+			if (sheet->mCells[gstate.current_thread].empty()) {
 				// Set to maxBuffers, so this is the last iteration
 				gstate.current_buffer = gstate.max_buffers;
 
@@ -383,7 +383,7 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 						gstate.current_row = locs_infos[current_loc].row;
 					}
 
-					long long adjusted_row = calcAdjustedRow(gstate.current_row, sheet->mSkipRows);
+					long long adjusted_row = calc_adjusted_row(gstate.current_row, sheet->mSkipRows);
 
 					// This only happens for header rows -- we want to skip them
 					if (adjusted_row < 0) {
@@ -408,8 +408,9 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 					}
 				}
 				// We need to check this here, because we iterate up to cells.size() to get the last location info
-				if (gstate.current_cell >= cells.size())
+				if (gstate.current_cell >= cells.size()) {
 					break;
+				}
 
 				// Use short variable name for better readability
 				const auto current_column = gstate.current_column;
@@ -425,7 +426,7 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 				const XlsxCell &cell = cells[gstate.current_cell];
 				//! Number of rows we skipped while parsing
 				long long mSkipRows = sheet->mSkipRows;
-				long long adjustedRow = calcAdjustedRow(gstate.current_row, mSkipRows);
+				long long adjusted_row = calc_adjusted_row(gstate.current_row, mSkipRows);
 
 				bool types_compatible =
 				    TypesCompatible(bind_data.types[current_column], cell.type, bind_data.coerce_to_string);
@@ -434,11 +435,11 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 				// so it's not stored in mCells. We handle this by setting all cells as Invalid (aka null)
 				// and set them valid when they appear in mCells
 				if (cell.type == CellType::T_NONE || cell.type == CellType::T_ERROR || !types_compatible) {
-					SetNull(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
+					SetNull(bind_data, output, flat_vectors, cell, adjusted_row, current_column);
 				} else if (bind_data.types[current_column] == LogicalType::VARCHAR && bind_data.coerce_to_string) {
-					SetCellString(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
+					SetCellString(bind_data, output, flat_vectors, cell, adjusted_row, current_column);
 				} else {
-					SetCell(bind_data, output, flat_vectors, cell, adjustedRow, current_column);
+					SetCell(bind_data, output, flat_vectors, cell, adjusted_row, current_column);
 				}
 
 				// Advance to next column
@@ -699,8 +700,8 @@ inline bool ConvertCellTypes(vector<LogicalType> &column_types, vector<string> &
 	//! Indicates if the first row contains only string values
 	bool first_row_all_string = true;
 
-	for (auto &colType : cell_types) {
-		switch (colType) {
+	for (auto &col_type : cell_types) {
+		switch (col_type) {
 		case CellType::T_STRING_REF:
 			column_types.push_back(LogicalType::VARCHAR);
 			column_names.push_back("String" + std::to_string(current_column_index));
@@ -780,7 +781,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	auto file_list = file_reader->CreateFileList(context, input.inputs[0]);
 	auto file_names = file_list->GetAllFiles();
 
-	if (file_names.size() == 0) {
+	if (file_names.empty()) {
 		throw BinderException("No files found in path");
 	} else if (file_names.size() > 1) {
 		throw BinderException("Only one file can be read at a time");
