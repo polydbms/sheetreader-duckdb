@@ -458,6 +458,159 @@ size_t StatefulCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChun
 	return GetCardinality(gstate);
 }
 
+/*! Same as StatefulCopy, but removed:
+   - String coercion
+	 - TypesCompatible check
+	 - Inline calc_adjusted_row by hand
+*/
+size_t FastCopy(SRGlobalState &gstate, const SRBindData &bind_data, DataChunk &output, vector<DataPtr> &flat_vectors) {
+
+	auto &sheet = bind_data.xlsx_sheet;
+
+	// Every thread has a list of buffers
+	D_ASSERT(bind_data.number_threads == sheet->mCells.size());
+
+	idx_t number_threads = bind_data.number_threads;
+
+	if (number_threads == 0) {
+		return 0;
+	}
+
+	size_t row_offset = gstate.chunk_count * STANDARD_VECTOR_SIZE;
+
+	// Initialize state for first call
+	if (gstate.current_locs.empty()) {
+		// Get number of buffers from first thread (is always the maximum)
+		gstate.max_buffers = sheet->mCells[0].size();
+		gstate.current_thread = 0;
+		gstate.current_buffer = 0;
+		gstate.current_cell = 0;
+		gstate.current_column = 0;
+		gstate.current_row = -1;
+		// Initialize current_locs for all threads
+		gstate.current_locs = std::vector<size_t>(number_threads, 0);
+	}
+
+	// Set all values to NULL per default, since sheetreader-core stores information about empty cells only by skipping
+	// them in mCells. Since we iterate over mCells, empty cells are implicitly skipped. So we wouldn't know if a cell
+	// in the chunk is empty if we don't set it to NULL here and set it to valid when we find it in mCells (see
+	// SetValue)
+	SetAllInvalid(output, STANDARD_VECTOR_SIZE);
+
+	//! To get the correct order of rows we iterate for(buffer_index) { for(thread_index) { for(cell_index) } }
+	//! This is due to how sheetreader-core writes the data to the buffers (stored in mCells)
+	for (; gstate.current_buffer < gstate.max_buffers; ++gstate.current_buffer) {
+		for (; gstate.current_thread < sheet->mCells.size(); ++gstate.current_thread) {
+
+			// If there are no more buffers to read, prepare for finishing copying
+			if (sheet->mCells[gstate.current_thread].empty()) {
+				// Set to maxBuffers, so this is the last iteration
+				gstate.current_buffer = gstate.max_buffers;
+
+				// Return number of copied rows in this chunk
+				return GetCardinality(gstate);
+			}
+
+			//! Current cell buffer
+			const std::vector<XlsxCell> cells = sheet->mCells[gstate.current_thread].front();
+			//! Location info for current thread
+			const std::vector<LocationInfo> &locs_infos = sheet->mLocationInfos[gstate.current_thread];
+			//! Current location index in current thread
+			size_t &current_loc = gstate.current_locs[gstate.current_thread];
+
+			// This is a weird implementation detail of sheetreader-core:
+			// currentCell <= cells.size() because there might be location info after last cell
+			for (; gstate.current_cell <= cells.size(); ++gstate.current_cell) {
+
+				// Description of the following loop:
+				// Update currentRow & currentColumn when location info is available for current cell at currentLoc.
+				// After setting those values: Advance to next location info.
+				//
+				// This means that the values won't be updated if there is no location info for the current cell
+				// (e.g. not first cell in row)
+				//
+				// Edge case 0:
+				// Loop is executed n+1 times for first location info, where n is the number of skip_rows (specified as
+				// parameter for interleaved) This is because, SheetReader creates location infos for the skipped lines
+				// with cell == column == buffer == 0 sames as for the first "real" row
+				//
+				// Edge case 1:
+				// For empty cells, sheetreader-core also generates a location info that points to the same cell as the
+				// next location info. By using the condition for the while loop, we skip these empty cells
+				while (current_loc < locs_infos.size() && locs_infos[current_loc].buffer == gstate.current_buffer &&
+				       locs_infos[current_loc].cell == gstate.current_cell) {
+
+					gstate.current_column = locs_infos[current_loc].column;
+					// Not sure whether row is ever -1ul, but this is how it's handled in sheetreader-core's nextRow()
+					if (locs_infos[current_loc].row == -1ul) {
+						++gstate.current_row;
+					} else {
+						gstate.current_row = locs_infos[current_loc].row;
+					}
+
+					long long adjusted_row = gstate.current_row - sheet->mSkipRows - row_offset;
+
+					// This only happens for header rows -- we want to skip them
+					if (adjusted_row < 0) {
+						++current_loc;
+						// Skip to next row
+						if (current_loc < locs_infos.size()) {
+							gstate.current_cell = locs_infos[current_loc].cell;
+						} else {
+							throw InternalException("Skipped more rows than available in first buffer -- consider "
+							                        "decreasing number of threads");
+						}
+						continue;
+					}
+
+					// Increment index to location info for next iteration
+					++current_loc;
+
+					// If we reached the row limit of the current chunk, we return the number of copied rows
+					if (CheckRowLimitReached(gstate)) {
+						// Subtract 1, because we increment current_row before checking the limit
+						return (GetCardinality(gstate) - 1);
+					}
+				}
+				// We need to check this here, because we iterate up to cells.size() to get the last location info
+				if (gstate.current_cell >= cells.size()) {
+					break;
+				}
+
+				// Use short variable name for better readability
+				const auto current_column = gstate.current_column;
+
+				// If this cell is in a column that was not present in the first row, we throw an error
+				if (current_column >= bind_data.types.size()) {
+					throw InvalidInputException(
+					    "Row " + std::to_string(gstate.current_row) + "has more columns than the first row. Has: " +
+					    std::to_string(current_column + 1) + " Expected: " + std::to_string(bind_data.types.size()));
+				}
+
+				//! Content of current cell
+				const XlsxCell &cell = cells[gstate.current_cell];
+				//! Number of rows we skipped while parsing
+				long long adjusted_row = gstate.current_row - sheet->mSkipRows - row_offset;
+
+				SetCell(bind_data, output, flat_vectors, cell, adjusted_row, current_column);
+
+				// Advance to next column
+				++gstate.current_column;
+			}
+
+			// If we reached the last cell in the current buffer, we remove it from the thread
+			sheet->mCells[gstate.current_thread].pop_front();
+			// Reset for next buffer
+			gstate.current_cell = 0;
+		}
+		// Reset thread index for next buffer index
+		gstate.current_thread = 0;
+	}
+	// Return number of copied rows in this chunk when all buffers are read (i.e. curren_buffer == max_buffers)
+	return GetCardinality(gstate);
+}
+
+
 //! Finish the current chunk
 //! - Set the cardinality of the chunk
 //! - Store the time it took to copy the chunk
@@ -571,7 +724,7 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 	// Copy data from sheetreader-core's mCells to DuckDB data chunk
 	// =====================================
 
-	// Fastest and most versatile version is 3
+	// Default is version is 3 (fast & most versatile)
 	if (bind_data.version == 1) {
 		// This version uses
 		// - SetValue() for all types
@@ -681,6 +834,18 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 
 		//! Number of rows copied in this iteration
 		auto cardinality = StatefulCopy(gstate, bind_data, output, flat_vectors);
+
+		FinishChunk(output, cardinality, gstate, start_time_copy_chunk, bind_data.flag == 1);
+
+		return;
+	} else if (bind_data.version == 4) {
+		// This version:
+		// - Uses SetValue only for VARCHAR, for other types it uses directly the flat vectors
+		// - Doesn't use nextRow() but directly iterates over the buffers
+		// - Tries to be faster by removing some unessential features and checks
+
+		//! Number of rows copied in this iteration
+		auto cardinality = FastCopy(gstate, bind_data, output, flat_vectors);
 
 		FinishChunk(output, cardinality, gstate, start_time_copy_chunk, bind_data.flag == 1);
 
