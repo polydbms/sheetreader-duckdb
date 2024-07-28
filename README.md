@@ -1,6 +1,6 @@
-# Sheetreader DuckDB extension
+# SheetReader DuckDB extension
 
-This DuckDB extension, Sheetreader, allows you to read .XLSX files by using https://github.com/polydbms/sheetreader-core.
+This DuckDB extension, SheetReader, allows you to read .XLSX files by using https://github.com/polydbms/sheetreader-core.
 
 ---
 
@@ -8,7 +8,7 @@ This repository is based on https://github.com/duckdb/extension-template.
 
 ## Table of Contents
 
-- [Sheetreader DuckDB extension](#sheetreader-duckdb-extension)
+- [SheetReader DuckDB extension](#sheetreader-duckdb-extension)
   - [Table of Contents](#table-of-contents)
   - [Installing pre-built binaries](#installing-pre-built-binaries)
   - [Usage](#usage)
@@ -76,14 +76,16 @@ D FROM sheetreader('data.xlsx');
 Example usage of the `sheetreader()` table function with many available parameters set:
 
 ```sql
-D CREATE TABLE test AS FROM sheetreader('test.xlsx',
-  sheet_index=1,
-  threads=16, 
-  skip_rows=0, 
-  has_header=TRUE, 
-  types=[BOOLEAN,VARCHAR], 
-  coerce_to_string=TRUE,
-  force_types=TRUE);
+D CREATE TABLE test AS FROM sheetreader(
+    'test.xlsx',
+    sheet_index=1,
+    threads=16,
+    skip_rows=0,
+    has_header=TRUE,
+    types=[BOOLEAN,VARCHAR],
+    coerce_to_string=TRUE,
+    force_types=TRUE
+  );
 ```
 
 ### Parameters
@@ -101,7 +103,7 @@ D CREATE TABLE test AS FROM sheetreader('test.xlsx',
 
 ## Building yourself
 
-First, clone this repository with the `--recurse-submodules` flag --- so you get all the needed source files. 
+First, clone this repository with the `--recurse-submodules` flag --- so you get all the needed source files.
 
 To build the extension, run:
 ```sh
@@ -123,3 +125,24 @@ To run the self-built extension code, simply start the shell with `./build/relea
 
 TBD
 <!-- Benchmarks of sheetreader & spatial + link to paper. -->
+
+## Paper
+SheetReader was published in the [Information Systems Journal](https://www.sciencedirect.com/science/article/abs/pii/S0306437923000194)
+```
+@article{DBLP:journals/is/GavriilidisHZM23,
+  author       = {Haralampos Gavriilidis and
+                  Felix Henze and
+                  Eleni Tzirita Zacharatou and
+                  Volker Markl},
+  title        = {SheetReader: Efficient Specialized Spreadsheet Parsing},
+  journal      = {Inf. Syst.},
+  volume       = {115},
+  pages        = {102183},
+  year         = {2023},
+  url          = {https://doi.org/10.1016/j.is.2023.102183},
+  doi          = {10.1016/J.IS.2023.102183},
+  timestamp    = {Mon, 26 Jun 2023 20:54:32 +0200},
+  biburl       = {https://dblp.org/rec/journals/is/GavriilidisHZM23.bib},
+  bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+```
