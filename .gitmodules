@@ -8,4 +8,4 @@
 	branch = main
 [submodule "src/include/sheetreader-core"]
 	path = src/include/sheetreader-core
-	url = git@github.com:freddie-freeloader/sheetreader-core.git
+	url = https://github.com/polydbms/sheetreader-core.git
