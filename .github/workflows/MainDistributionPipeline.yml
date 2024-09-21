@@ -30,7 +30,7 @@ jobs:
     with:
       duckdb_version: v1.1.0
       extension_name: sheetreader
-      # exclude_archs: "windows_amd64_rtools"
+      exclude_archs: "windows_amd64_rtools"
 
   # We disable deployment for now
   #
