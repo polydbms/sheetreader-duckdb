@@ -7,7 +7,7 @@ We did a few benchmarks comparing our extension to the import function which the
 We would like to offer this extension as a DuckDB community extension.
 
 These are issues that have to be resolved first, though:
-- We have a build pipeline set up (using https://github.com/duckdb/extension-ci-tools) & the builds are successful for every platform except `windows_amd64_rtools` (as you can see here: https://github.com/polydbms/sheetreader-duckdb/actions/runs/10646291686/job/29512978192#step:14:1220).
+- We have a build pipeline set up (using https://github.com/duckdb/extension-ci-tools) & the builds are successful for every platform except `windows_amd64_rtools` (as you can see here: https://github.com/polydbms/sheetreader-duckdb/actions/runs/10971586308/job/30466877905#step:15:1293).
   There is an issue with functions marked as `dllimport`. Unfortunately, I don't have experience with MinGW and it doesn't seem to be related to our code.
   I found these two issues where people has similar issues: https://github.com/duckdb/duckdb/issues/4144#issuecomment-1264625149 & https://github.com/marcboeker/go-duckdb/issues/51#issuecomment-1859057708.
 - We had issues with the builds created by the CI and uploaded to S3. When loading the builds into DuckDB, we got a "metadata mismatch" error. The issue we had is documented in this issue: https://github.com/duckdb/extension-template/issues/70. For the time being, we truncated the metadata from the binary manually to circumvent the issue.
