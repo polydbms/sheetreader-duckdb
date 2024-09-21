@@ -10,8 +10,6 @@
 #include "sheetreader-core/src/XlsxFile.h"
 #include "sheetreader-core/src/XlsxSheet.h"
 
-#include <chrono>
-
 namespace duckdb {
 
 class SheetreaderExtension : public Extension {
@@ -37,9 +35,6 @@ public:
 	//! The paths of the files we're reading
 	vector<string> file_names;
 
-	//! For testing purposes
-	idx_t version = 3;
-
 	//! All column names (in order)
 	vector<string> names;
 
@@ -57,8 +52,6 @@ public:
 	//! Number of rows to skip while parsing
 	idx_t skip_rows = 0;
 
-	idx_t flag = 0;
-
 	//! Coerce all cells to string in user defined column types
 	bool coerce_to_string = false;
 
@@ -67,9 +60,6 @@ public:
 
 	//! Use user_types even if they are not compatible with types determined by first/second row
 	bool force_types = false;
-
-	std::chrono::time_point<std::chrono::system_clock> start_time_parsing;
-	std::chrono::time_point<std::chrono::system_clock> finish_time_parsing;
 
 private:
 	SRBindData(ClientContext &context, vector<string> file_names, string sheet_name);
@@ -80,19 +70,11 @@ public:
 	SRGlobalState(ClientContext &context, const SRBindData &bind_data);
 
 public:
-
 	//! Bound data
 	const SRBindData &bind_data;
 
 	//! Number of chunk read so far
 	idx_t chunk_count = 0;
-
-	//! Start time of current chunk
-	std::chrono::time_point<std::chrono::system_clock> start_time_copy;
-	//! Finish time of current chunk
-	std::chrono::time_point<std::chrono::system_clock> finish_time_copy;
-	//! Copy times of all chunks
-	vector<double> times_copy = {};
 
 	//! State of copying from mCells
 	size_t max_buffers;
