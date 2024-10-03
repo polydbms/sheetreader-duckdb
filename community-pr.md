@@ -6,7 +6,7 @@ We did a few benchmarks comparing our extension to the import function which the
 
 We would like to offer this extension as a DuckDB community extension.
 
-Two remarks about the build pipeline / CI:
+Two remarks about the build pipeline / CI (which shouldn't be issues with the community extension CI):
 - We have a build pipeline set up (using https://github.com/duckdb/extension-ci-tools) & the builds are successful for every platform except `windows_amd64_rtools` (as you can see here: https://github.com/polydbms/sheetreader-duckdb/actions/runs/10971586308/job/30466877905#step:15:1293).
   There is an issue with functions marked as `dllimport`. Unfortunately, I don't have experience with MinGW, and it doesn't seem to be related to our code.
 
