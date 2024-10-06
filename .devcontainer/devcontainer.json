@@ -7,7 +7,11 @@
 	},
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
+	"features": {
+		"ghcr.io/devcontainers/features/python:1": {
+			"installJupyterlab": "true"
+		}
+	},
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
@@ -17,10 +21,13 @@
 
 	// Configure tool-specific properties.
 	// "customizations": {},
-  "customizations": {
-    "vscode": {
-      "extensions": ["llvm-vs-code-extensions.vscode-clangd"]
-    }
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"llvm-vs-code-extensions.vscode-clangd",
+				"ms-toolsai.jupyter"
+			]
+		}
 	}
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "root"
