@@ -78,9 +78,9 @@ You can find benchmarks in the above-mentioned paper, comparing SheetReader to o
 Here is a plot of preliminary benchmarks comparing the `sheetreader` DuckDB extension to the `spatial` extension's `st_read` function:
 
 
-![Benchmark](./assets/benchmark_customer_table.png)
+![Benchmark](./assets/benchmark_boxplot.png)
 
-(*Note: The benchmarks were executed on a MacBook Pro 2018 with a 2,3 GHZ Quad Core Intel Core i5*)
+(*System info: 2x Intel(R) Xeon(R) E5530 @ 2.40GHz, 47GiB RAM*)
 
 ## Building yourself
 
