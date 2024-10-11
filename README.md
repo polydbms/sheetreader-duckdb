@@ -20,7 +20,21 @@ This repository is based on https://github.com/duckdb/extension-template.
 
 ## Usage
 
-Example usage of the `sheetreader()` function with many of the available parameters set:
+Before using SheetReader, we need to install it from the [community extensions](https://community-extensions.duckdb.org/extensions/sheetreader.html) and load it into our DuckDB-environemnt:
+
+```sql
+INSTALL sheetreader FROM community;
+LOAD sheetreader;
+```
+
+We can then run our first query:
+
+```sql
+D SELECT *
+  FROM sheetreader('test.xlsx');
+```
+
+The `sheetreader()` function offers further parameters to load the XLSX-file as required:
 
 ```sql
 D CREATE TABLE test AS FROM sheetreader(
