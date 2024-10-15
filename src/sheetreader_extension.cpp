@@ -788,6 +788,22 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	// Determine column types & names
 	// =====================================
 
+	// First buffer of first thread
+	auto first_buffer = &sheet->mCells[0].front();
+
+	// Check preconditions for determining column types:
+	//
+	// 0. Need minimum of two rows to determine column types
+	if (number_rows < 2) {
+		throw BinderException("Need minimum of two rows to determine column types");
+	}
+	//
+	// 1. Check that nothing weird happened due to interleaved reading
+	if (first_buffer->size() < number_columns * 2) {
+		throw BinderException("Internal SheetReader extension error: Need minimum of two rows in first buffer to "
+		                      "determine column types and auto detect header row");
+	}
+
 	//! Cell types in the first row after skipped rows
 	vector<CellType> cell_types_first_row;
 	//! Cell types in the second row after skipped rows
@@ -795,15 +811,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	//! Cell values in the first row after skipped rows
 	vector<XlsxCell> cells_first_row;
 
-	// First buffer of first thread
-	auto first_buffer = &sheet->mCells[0].front();
-
 	// Probing the first two rows to get the types
-	if (first_buffer->size() < number_columns * 2) {
-		throw BinderException("Internal SheetReader extension error: Need minimum of two rows in first buffer to "
-		                      "determine column types and auto detect header row");
-	}
-
 	for (idx_t i = 0; i < number_columns; i++) {
 		cell_types_first_row.push_back(sheet->mCells[0].front()[i].type);
 		cells_first_row.push_back(sheet->mCells[0].front()[i]);
@@ -829,57 +837,56 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	vector<LogicalType> column_types_second_row;
 	vector<string> column_names_second_row;
+
 	//! Indicates whether a header row was detected
 	bool header_detected = false;
 
-	if (number_rows > 1) {
-		// Check if second row contains only string values, get DuckDB types & generic column names
-		bool second_row_all_string =
-		    ConvertCellTypes(column_types_second_row, column_names_second_row, cell_types_second_row);
+	// Check if second row contains only string values, get DuckDB types & generic column names
+	bool second_row_all_string =
+	    ConvertCellTypes(column_types_second_row, column_names_second_row, cell_types_second_row);
 
-		// If the first row contains only string values, but the second row doesn't, we assume that the first row is a
-		// header row
-		if (use_header || (first_row_all_string && !second_row_all_string)) {
-			header_detected = true;
+	// If the first row contains only string values, but the second row doesn't, we assume that the first row is a
+	// header row
+	if (use_header || (first_row_all_string && !second_row_all_string)) {
+		header_detected = true;
 
-			// Since the first row is a header row, we use the cell types of the second row
-			return_types = column_types_second_row;
-			bind_data->types = column_types_second_row;
+		// Since the first row is a header row, we use the cell types of the second row
+		return_types = column_types_second_row;
+		bind_data->types = column_types_second_row;
 
-			//! Column names determined from the first row
-			vector<string> header_names;
+		//! Column names determined from the first row
+		vector<string> header_names;
 
-			// Get header names from cell values of first row
-			for (idx_t j = 0; j < cells_first_row.size(); j++) {
-				switch (cells_first_row[j].type) {
-				case CellType::T_STRING_REF: {
-					auto value = bind_data->xlsx_file.getString(cells_first_row[j].data.integer);
-					header_names.push_back(value);
-					break;
-				}
-				case CellType::T_STRING:
-				case CellType::T_STRING_INLINE: {
-					// TODO
-					throw BinderException("Inline & dynamic String types not supported yet");
-					break;
-				}
-				default:
-					throw BinderException("Header row contains non-string values");
-				}
+		// Get header names from cell values of first row
+		for (idx_t j = 0; j < cells_first_row.size(); j++) {
+			switch (cells_first_row[j].type) {
+			case CellType::T_STRING_REF: {
+				auto value = bind_data->xlsx_file.getString(cells_first_row[j].data.integer);
+				header_names.push_back(value);
+				break;
 			}
-
-			// Set column names to header names
-			names = header_names;
-			bind_data->names = header_names;
-		} else {
-			// If first row is not a header row, we use the cell types of the first row for the column types
-			return_types = column_types_first_row;
-			bind_data->types = column_types_first_row;
-
-			// Use generic column names
-			names = column_names_first_row;
-			bind_data->names = column_names_first_row;
+			case CellType::T_STRING:
+			case CellType::T_STRING_INLINE: {
+				// TODO
+				throw BinderException("Inline & dynamic String types not supported yet");
+				break;
+			}
+			default:
+				throw BinderException("Header row contains non-string values");
+			}
 		}
+
+		// Set column names to header names
+		names = header_names;
+		bind_data->names = header_names;
+	} else {
+		// If first row is not a header row, we use the cell types of the first row for the column types
+		return_types = column_types_first_row;
+		bind_data->types = column_types_first_row;
+
+		// Use generic column names
+		names = column_names_first_row;
+		bind_data->names = column_names_first_row;
 	}
 
 	// Since header is only used for determining column names, we skip it
