@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  sheetreader-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ../:/workspace/sheetreader-duckdb
+      - ccache_vol:/root/.ccache
+    environment:
+      - PATH=/usr/lib/ccache:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    working_dir: /workspace/sheetreader-duckdb
+    command: /bin/bash
+
+volumes:
+  ccache_vol:

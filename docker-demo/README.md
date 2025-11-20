@@ -1,72 +1,97 @@
 # SheetReader DuckDB Docker Demo
 
-Demo of the **sheetreader-duckdb** extension running in a Docker container to safely query Excel files with SQL.
+Demo of the **sheetreader-duckdb** extension with DuckDB v1.4.0+ compatibility.
 
 ## Prerequisites
 
-- Docker Desktop must be running
+- Docker and Docker Compose installed and running
 
-## Quick Start (Interactive Mode)
+## DuckDB v1.4.0 Extension Verification
 
-### Step 1: Navigate to the demo directory
+This setup allows you to verify that the sheetreader extension works correctly with DuckDB v1.4.0+.
+
+### Build and Test the Extension
+
+**Step 1: Navigate to the demo directory**
 ```bash
-cd c:\Users\mithu\OneDrive\Desktop\SA_Harry\SheetReader\docker-demo
+cd docker-demo
 ```
 
-### Step 2: Build and start DuckDB (first time only)
+**Step 2: Build the Docker image**
 ```bash
-docker-compose build
+docker compose build
 ```
 
-### Step 3: Start DuckDB
+**Step 3: Build the extension from source**
 ```bash
-docker-compose run --rm duckdb
+docker compose run --rm sheetreader-dev bash -c "GEN=ninja make"
 ```
 
-### Step 4: Inside DuckDB, run SQL commands
-```sql
--- Install and load the extension
-INSTALL sheetreader FROM community;
-LOAD sheetreader;
+This will:
+- Build DuckDB v1.4.0+ from source
+- Compile the sheetreader extension with the new API
+- Create a DuckDB binary with the extension pre-loaded
 
--- Query your Excel file
-SELECT * FROM sheetreader('test.xlsx');
-
--- Get statistics
-SELECT 
-    MIN(Numeric0) as min_value,
-    MAX(Numeric0) as max_value,
-    AVG(Numeric0) as avg_value,
-    SUM(Numeric0) as sum_value
-FROM sheetreader('test.xlsx');
-
--- Create a table
-CREATE TABLE excel_data AS FROM sheetreader('test.xlsx');
-
--- Filter data
-SELECT * FROM excel_data WHERE Numeric0 > 50;
+**Step 4: Run the verification test**
+```bash
+docker compose run --rm sheetreader-dev bash -c "./build/release/duckdb < docker-demo/test_verification.sql"
 ```
 
-### Step 5: Exit when done
+**Expected output:**
 ```
-.exit
+┌──────────┐
+│ Numeric0 │
+│  double  │
+├──────────┤
+│     92.0 │
+│     48.0 │
+│     99.0 │
+│     35.0 │
+│     97.0 │
+└──────────┘
 ```
+
+If you see this output, the extension is working correctly with DuckDB v1.4.0+! ✅
 
 ---
 
-## Run the Full Demo Script (Automated)
+## Interactive Development
 
-To run all queries automatically:
+For interactive development and testing:
 
+**Start an interactive shell:**
 ```bash
-docker-compose run --rm duckdb -init demo.sql
+docker compose run --rm sheetreader-dev bash
+```
+
+**Inside the container, you can:**
+```bash
+# Build the extension
+GEN=ninja make
+
+
+# start DuckDB interactively
+./build/release/duckdb
+```
+
+**Inside DuckDB, try queries:**
+```sql
+-- Query the Excel file
+SELECT * FROM sheetreader('docker-demo/test.xlsx');
+
+```
+
+**Exit:**
+```
+.exit  # Exit DuckDB
+exit   # Exit container
 ```
 
 ---
 
 ## Files
 
-- **Dockerfile** - Container setup with DuckDB
-- **docker-compose.yml** - Docker configuration (includes volume mounts)
-- **demo.sql** - Demo SQL script
-- **test.xlsx** - Sample Excel file with 5 random numbers
+- **Dockerfile** - Ubuntu 22.04 with build dependencies (git, cmake, ninja, etc.)
+- **docker-compose.yml** - Docker Compose setup with volume mounts and ccache
+- **test.xlsx** - Sample Excel file with test data
+- **test_verification.sql** - Verification query for testing
