@@ -5,6 +5,13 @@ FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y \
     wget \
     unzip \
+    git \
+    cmake \
+    build-essential \
+    ninja-build \
+    libssl-dev \
+    python3-dev \
+    ccache \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install DuckDB

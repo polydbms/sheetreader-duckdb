@@ -28,6 +28,8 @@
 #include "sheetreader_extension.hpp"
 
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
+#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/database.hpp"
 
 namespace duckdb {
 
@@ -939,7 +941,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	return std::move(bind_data);
 }
 
-static void LoadInternal(ExtensionLoader &loader) {
+static void LoadInternal(DatabaseInstance &db) {
 	// Register a table function
 	TableFunction sheetreader_table_function("sheetreader", {LogicalType::VARCHAR}, SheetreaderCopyTableFun,
 	                                         SheetreaderBindFun, SRGlobalTableFunctionState::Init,
@@ -958,11 +960,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	sheetreader_table_function.named_parameters["force_types"] = LogicalType::BOOLEAN;
 	sheetreader_table_function.named_parameters["coerce_to_string"] = LogicalType::BOOLEAN;
 
-	loader.RegisterFunction(sheetreader_table_function);
+	ExtensionUtil::RegisterFunction(db, sheetreader_table_function);
 }
 
-void SheetreaderExtension::Load(ExtensionLoader &loader) {
-	LoadInternal(loader);
+void SheetreaderExtension::Load(DuckDB &db) {
+	LoadInternal(*db.instance);
 }
 std::string SheetreaderExtension::Name() {
 	return "sheetreader";
@@ -972,7 +974,13 @@ std::string SheetreaderExtension::Name() {
 
 extern "C" {
 
-DUCKDB_CPP_EXTENSION_ENTRY(sheetreader, loader) {
-	duckdb::LoadInternal(loader);
+DUCKDB_EXTENSION_API void sheetreader_init(duckdb::DatabaseInstance &db) {
+	duckdb::DuckDB db_wrapper(db);
+	db_wrapper.LoadExtension<duckdb::SheetreaderExtension>();
+}
+
+DUCKDB_EXTENSION_API const char *sheetreader_version() {
+	return duckdb::DuckDB::LibraryVersion();
 }
 }
+
