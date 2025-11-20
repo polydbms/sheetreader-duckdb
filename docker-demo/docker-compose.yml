@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  duckdb:
+    build: .
+    container_name: sheetreader-demo
+    volumes:
+      - ./test.xlsx:/workspace/test.xlsx
+      - ./demo.sql:/workspace/demo.sql
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    entrypoint: [ "duckdb" ]
