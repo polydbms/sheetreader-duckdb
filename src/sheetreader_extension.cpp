@@ -970,6 +970,14 @@ std::string SheetreaderExtension::Name() {
 	return "sheetreader";
 }
 
+std::string SheetreaderExtension::Version() const {
+#ifdef EXT_VERSION_SHEETREADER
+	return EXT_VERSION_SHEETREADER;
+#else
+	return "";
+#endif
+}
+
 } // namespace duckdb
 
 extern "C" {
