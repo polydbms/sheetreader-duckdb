@@ -1,7 +1,7 @@
 #include "duckdb.h"
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/helper.hpp"
-#include "duckdb/common/multi_file_reader.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
@@ -28,7 +28,6 @@
 #include "sheetreader_extension.hpp"
 
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/main/database.hpp"
 
 namespace duckdb {
@@ -639,13 +638,16 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	// Get the file name from the input parameters & verify it exists
 	auto file_reader = MultiFileReader::Create(input.table_function);
 	auto file_list = file_reader->CreateFileList(context, input.inputs[0]);
-	auto file_names = file_list->GetAllFiles();
+	auto file_infos = file_list->GetAllFiles();
 
-	if (file_names.empty()) {
+	if (file_infos.empty()) {
 		throw BinderException("No files found in path");
-	} else if (file_names.size() > 1) {
+	} else if (file_infos.size() > 1) {
 		throw BinderException("Only one file can be read at a time");
 	}
+
+	// Extract the file path from OpenFileInfo
+	string file_name = file_infos[0].path;
 
 	//! User specified sheet name
 	string sheet_name;
@@ -682,12 +684,12 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 	try {
 		if (!sheet_name.empty()) {
-			bind_data = make_uniq<SRBindData>(file_names[0], sheet_name);
+			bind_data = make_uniq<SRBindData>(file_name, sheet_name);
 		} else if (sheet_index_set) {
-			bind_data = make_uniq<SRBindData>(file_names[0], sheet_index);
+			bind_data = make_uniq<SRBindData>(file_name, sheet_index);
 		} else {
 			// Default: sheet_index=1
-			bind_data = make_uniq<SRBindData>(file_names[0]);
+			bind_data = make_uniq<SRBindData>(file_name);
 		}
 	} catch (std::exception &e) {
 		throw BinderException(e.what());
@@ -941,7 +943,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	return std::move(bind_data);
 }
 
-static void LoadInternal(DatabaseInstance &db) {
+static void LoadInternal(ExtensionLoader &loader) {
 	// Register a table function
 	TableFunction sheetreader_table_function("sheetreader", {LogicalType::VARCHAR}, SheetreaderCopyTableFun,
 	                                         SheetreaderBindFun, SRGlobalTableFunctionState::Init,
@@ -960,11 +962,11 @@ static void LoadInternal(DatabaseInstance &db) {
 	sheetreader_table_function.named_parameters["force_types"] = LogicalType::BOOLEAN;
 	sheetreader_table_function.named_parameters["coerce_to_string"] = LogicalType::BOOLEAN;
 
-	ExtensionUtil::RegisterFunction(db, sheetreader_table_function);
+	loader.RegisterFunction(sheetreader_table_function);
 }
 
-void SheetreaderExtension::Load(DuckDB &db) {
-	LoadInternal(*db.instance);
+void SheetreaderExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
 }
 std::string SheetreaderExtension::Name() {
 	return "sheetreader";
@@ -984,7 +986,7 @@ extern "C" {
 
 DUCKDB_EXTENSION_API void sheetreader_init(duckdb::DatabaseInstance &db) {
 	duckdb::DuckDB db_wrapper(db);
-	db_wrapper.LoadExtension<duckdb::SheetreaderExtension>();
+	db_wrapper.LoadStaticExtension<duckdb::SheetreaderExtension>();
 }
 
 DUCKDB_EXTENSION_API const char *sheetreader_version() {

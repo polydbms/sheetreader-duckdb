@@ -24,7 +24,7 @@ docker compose build
 
 **Step 3: Build the extension from source**
 ```bash
-docker compose run --rm sheetreader-dev bash -c "GEN=ninja make"
+docker compose run --rm sheetreader-dev bash -c "GEN=ninja NINJA_BUILD_FLAGS='-j2' make"
 ```
 
 This will:

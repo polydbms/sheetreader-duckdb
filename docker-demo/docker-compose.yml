@@ -12,6 +12,10 @@ services:
       - PATH=/usr/lib/ccache:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     working_dir: /workspace/sheetreader-duckdb
     command: /bin/bash
+    deploy:
+      resources:
+        limits:
+          memory: 12G # Limit to 12GB, leaving 4GB for host system
 
 volumes:
   ccache_vol:
