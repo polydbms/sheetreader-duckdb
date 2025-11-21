@@ -984,3 +984,6 @@ DUCKDB_EXTENSION_API const char *sheetreader_version() {
 }
 }
 
+#ifndef DUCKDB_EXTENSION_MAIN
+#error DUCKDB_EXTENSION_MAIN not defined
+#endif
