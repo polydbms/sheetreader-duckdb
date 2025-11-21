@@ -29,6 +29,7 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.4.0
     with:
       duckdb_version: v1.4.0
+      ci_tools_version: v1.4.0
       extension_name: sheetreader
       exclude_archs: "windows_amd64_rtools"
 
