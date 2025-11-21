@@ -34,6 +34,10 @@ namespace duckdb {
 
 //! Determine default number of threads
 inline idx_t DefaultThreads() {
+#ifdef __EMSCRIPTEN__
+	// WebAssembly doesn't support threading in MVP builds
+	return 1;
+#else
 	// Returns 0 if not able to detect
 	idx_t sys_number_threads = std::thread::hardware_concurrency();
 
@@ -45,6 +49,7 @@ inline idx_t DefaultThreads() {
 	}
 
 	return appropriate_number_threads;
+#endif
 }
 
 // =====================================
@@ -991,6 +996,11 @@ DUCKDB_EXTENSION_API void sheetreader_init(duckdb::DatabaseInstance &db) {
 
 DUCKDB_EXTENSION_API const char *sheetreader_version() {
 	return duckdb::DuckDB::LibraryVersion();
+}
+
+DUCKDB_EXTENSION_API void sheetreader_duckdb_cpp_init(duckdb::ExtensionLoader &loader) {
+	duckdb::SheetreaderExtension extension;
+	extension.Load(loader);
 }
 }
 
