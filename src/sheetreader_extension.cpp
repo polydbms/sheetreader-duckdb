@@ -725,10 +725,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			// Convert strings to LogicalTypes & check if they are supported
 			for (auto &child : children) {
 				string raw_type = StringValue::Get(child);
-				LogicalType logical_type = TransformStringToLogicalType(raw_type);
-				if (logical_type.id() == LogicalTypeId::USER) {
-					throw BinderException("Unrecognized type \"%s\" for %s definition", raw_type, kv.first);
-				}
+				LogicalType logical_type = TransformStringToLogicalType(raw_type, context);
 				switch (logical_type.id()) {
 				case LogicalTypeId::VARCHAR:
 				case LogicalTypeId::DOUBLE:

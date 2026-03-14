@@ -1,0 +1,42 @@
+name: Release Pipeline
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  upload-assets:
+    name: Upload Release Assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download latest build artifacts
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{secrets.GITHUB_TOKEN}}
+          workflow: MainDistributionPipeline.yml
+          branch: ${{ github.event.repository.default_branch }}
+          path: artifacts
+
+      - name: Rename and Gzip artifacts
+        run: |
+          for file in $(find artifacts -name "*.duckdb_extension"); do
+            dir=$(basename $(dirname "$file"))
+            # Transform "sheetreader-vX.Y.Z-extension-PLATFORM" -> "sheetreader-ext-v0.2.0-for-duckdb-vX.Y.Z-PLATFORM"
+            clean_name=$(echo $dir | sed "s/sheetreader-v\(.*\)-extension-\(.*\)/sheetreader-ext-v0.2.0-for-duckdb-v\1-\2/")
+            mv "$file" "artifacts/${clean_name}.duckdb_extension"
+          done
+          gzip artifacts/*.duckdb_extension
+
+      - name: Upload Assets to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            artifacts/**/*.duckdb_extension.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install DuckDB
-RUN wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/duckdb_cli-linux-amd64.zip \
+RUN wget https://github.com/duckdb/duckdb/releases/download/v1.5.0/duckdb_cli-linux-amd64.zip \
     && unzip duckdb_cli-linux-amd64.zip \
     && mv duckdb /usr/local/bin/ \
     && chmod +x /usr/local/bin/duckdb \
@@ -26,7 +26,7 @@ WORKDIR /workspace
 
 # Copy the Excel file and demo script
 COPY test.xlsx /workspace/
-COPY demo.sql /workspace/
+COPY *.sql /workspace/
 
 # Set the entrypoint to bash for interactive use
 CMD ["/bin/bash"]

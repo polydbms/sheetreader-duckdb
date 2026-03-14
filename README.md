@@ -1,116 +1,138 @@
-# SheetReader DuckDB extension
+<p align="center">
+  <img src="./assets/logo-sheetreader.png" width="200">
+</p>
 
-`sheetreader` is a DuckDB extension that allows reading XLSX files into DuckDB tables with SheetReader, our blazingly fast XLSX parser (https://github.com/polydbms/sheetreader-core).
+# SheetReader DuckDB Extension: High-Speed Excel Parsing
 
----
+`sheetreader` is a DuckDB extension that enables blazingly fast **Excel (XLSX)** file ingestion, optimized for **speed and memory efficiency**. It is powered by [SheetReader](https://github.com/polydbms/sheetreader-core) – a specialized spreadsheet parser designed for high-performance analytics.
 
-This repository is based on https://github.com/duckdb/extension-template.
+<details>
+<summary><b>Table of Contents</b></summary>
 
-## Table of Contents
+- [Quickstart](#quickstart)
+- [Usage & Parameters](#usage--parameters)
+- [Benchmarks](#benchmarks)
+- [Advanced Installation](#advanced-installation)
+- [Docker Sandbox](#docker-sandbox)
+- [Ecosystem & Other Environments](#ecosystem--other-environments)
+- [Scientific Background](#scientific-background)
+</details>
 
-- [SheetReader DuckDB extension](#sheetreader-duckdb-extension)
-  - [Table of Contents](#table-of-contents)
-  - [Usage](#usage)
-    - [Parameters](#parameters)
-  - [More information on SheetReader](#more-information-on-sheetreader)
-  - [Benchmarks](#benchmarks)
-  - [Building yourself](#building-yourself)
-    - [Running the extension](#running-the-extension)
+## Quickstart
 
-## Usage
-
-Before using SheetReader, you need to install it from the [community extensions](https://community-extensions.duckdb.org/extensions/sheetreader.html) and load it into your DuckDB-environment:
+If you are using a standard DuckDB distribution, you can install and load the extension directly:
 
 ```sql
+-- 1. Install and load
 INSTALL sheetreader FROM community;
 LOAD sheetreader;
+
+-- 2. Query your Excel files immediately
+SELECT * FROM sheetreader('data.xlsx');
 ```
 
-Now, you can run your first query:
+## Usage & Parameters
+
+The `sheetreader()` function allows for fine-grained control over the Excel parsing process:
 
 ```sql
-D SELECT *
-  FROM sheetreader('test.xlsx');
-```
-
-The `sheetreader()` function offers further parameters to load the XLSX-file as required:
-
-```sql
-D CREATE TABLE test AS FROM sheetreader(
-    'test.xlsx',
-    sheet_index=1,
-    threads=16,
-    skip_rows=0,
-    has_header=TRUE,
-    types=[BOOLEAN,VARCHAR],
-    coerce_to_string=TRUE,
-    force_types=TRUE
-  );
+CREATE TABLE my_data AS 
+FROM sheetreader(
+    'data.xlsx',
+    sheet_index=1,        -- or sheet_name='Sales'
+    threads=8,            -- parallel parsing
+    has_header=TRUE,      -- specify header presence
+    skip_rows=0,          -- skip empty rows at top
+    coerce_to_string=TRUE -- force columns to VARCHAR
+);
 ```
 
 ### Parameters
 
-| Name               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |      Type       | Default                                                          |
-| :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------: | :--------------------------------------------------------------- |
-| `sheet_index`      | Index of the sheet to read. Starts at 1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |    `INTEGER`    | `1`                                                              |
-| `sheet_name`       | Name of the sheet to read. <br /> Only either `sheet_index` or `sheet_name` can be set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |    `VARCHAR`    | `""`                                                             |
-| `threads`          | Number of threads to use, while parsing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |    `INTEGER`    | Half of available cores; minimum 1                               |
-| `skip_rows`        | Number of rows to skip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |    `INTEGER`    | `0`                                                              |
-| `types`            | List of types for all columns <ul> <li> Types currently available:<br /> `VARCHAR`,`BOOLEAN`,`DOUBLE`, `DATE`.</li> <li> Useful in combination with `coerce_to_string` and `force_types`. </li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `LIST(VARCHAR)` | Uses types determined by first & second row (after skipped rows) |
-| `coerce_to_string` | Coerce all cells in column of type `VARCHAR` to string (i.e. `VARCHAR`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |    `BOOLEAN`    | `false`                                                          |
-| `force_types`      | Use `types` even if they are not compatible with types determined by first/second row. <br /> Cells, that are not of the column type, are set to `NULL` or coerced to string, if option is set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |    `BOOLEAN`    | `false`                                                          |
-| `has_header`       | If set to `true`: <ul> <li> Force to treat first row as header row (only works if all cells are of type `VARCHAR`). </li> <li> If successful, the cell contents are used for column names. </li> <li> Will overwrite the default behavior, which doesn't use the first row as headers, if all columns have type `VARCHAR`. </li> </ul> <br /> If set to `false`: <ul>  <li> The extension will still try to treat the first row as header row. </li> <li> The difference is that it will not fail, if the first row is not usable (i.e. not all cells are of type `VARCHAR`). </li> <li> The first row won't be used as headers, if all columns have type `VARCHAR`. </ul> |    `BOOLEAN`    | `false`                                                          |
+| Name               | Description | Type | Default |
+| :----------------- | :---------- | :--: | :------ |
+| `sheet_index`      | Index of the sheet (starts at 1). | `INTEGER` | `1` |
+| `sheet_name`       | Name of the sheet. Cannot be used with `sheet_index`. | `VARCHAR` | `""` |
+| `threads`          | Parallelism for parsing. | `INTEGER` | Cores / 2 |
+| `skip_rows`        | Number of rows to skip before reading. | `INTEGER` | `0` |
+| `types`            | Explicit column types: `VARCHAR`, `BOOLEAN`, `DOUBLE`, `DATE`. | `LIST(VARCHAR)` | Auto-detect |
+| `coerce_to_string` | Coerce all columns to `VARCHAR`. | `BOOLEAN` | `false` |
+| `force_types`      | Force specified types even if detection differs. | `BOOLEAN` | `false` |
+| `has_header`       | Control header detection/usage behavior. | `BOOLEAN` | `false` |
 
+## Benchmarks
 
-## More information on SheetReader
+SheetReader is optimized for speed and memory efficiency. Below is a benchmark on TPC-H tables on DuckDB version 1.4.1:
 
-SheetReader was published in the [Information Systems Journal](https://www.sciencedirect.com/science/article/abs/pii/S0306437923000194).
+![Performance Benchmark](./assets/duckdb_sheetreader_perf.png)
+*System info: 13th Gen Intel(R) Core(TM) i7-1370P, 62GiB RAM. The benchmark data consists of TPC-H tables generated with the DuckDB TPC-H extension and written out as Excel files using the spatial extension.*
+
+For a complete benchmark setup across many environments (DuckDB, PostgreSQL, Python, and R), please refer to the [sheetreader-demo repository](https://github.com/polydbms/sheetreader-demo).
+
+---
+
+## Advanced Installation
+
+### Option A: Unsigned GitHub Releases (Latest Dev)
+To use the absolute latest features from this repository before they hit the community index:
+
+1. Download the binary matching your OS and DuckDB version from [Releases](https://github.com/polydbms/sheetreader-duckdb/releases).
+2. Install in DuckDB:
+```sql
+SET allow_unsigned_extensions = true;
+INSTALL 'https://github.com/polydbms/sheetreader-duckdb/releases/download/v0.2.0/sheetreader-ext-v0.2.0-for-duckdb-v1.5.0-linux_amd64.duckdb_extension.gz';
+LOAD sheetreader;
 ```
+
+### Option B: Building from Source
+```sh
+# Clone and build
+git clone --recurse-submodules https://github.com/polydbms/sheetreader-duckdb
+cd sheetreader-duckdb
+GEN=ninja make release
+```
+
+## Docker Sandbox
+
+For a quick, isolated trial of the extension without installing anything on your host machine, use our Docker sandbox:
+
+```bash
+cd docker-demo
+docker compose build
+docker compose run --rm sheetreader-dev
+```
+Inside the container, you can run `duckdb -c ".read demo_community.sql"` to see the extension in action.
+
+---
+
+## The SheetReader Ecosystem
+
+SheetReader is also available for other environments:
+
+| Environment | Project | Key Feature |
+| :--- | :--- | :--- |
+| **C++** | [**sheetreader-core**](https://github.com/polydbms/sheetreader-core) | High-performance C++ core parsing engine |
+| **Python** | [**sheetreader-python**](https://github.com/polydbms/sheetreader-python) | Fast Excel parsing for Python (e.g., pandas) |
+| **R** | [**SheetReader-r**](https://github.com/fhenz/SheetReader-r) | Efficient Excel parsing for R (e.g., dataframes) |
+| **PostgreSQL** | [**pg_sheet_fdw**](https://github.com/polydbms/pg_sheet_fdw) | Foreign Data Wrapper (FDW) for Excel |
+
+---
+
+## Scientific Background
+
+SheetReader was introduced in the **PolyDB research project** ([polydbms.org](https://polydbms.org)). The initial design and evaluation was published in the **Information Systems Journal**. If you use this extension in your research, consider citing the following paper:
+
+```bibtex
 @article{DBLP:journals/is/GavriilidisHZM23,
-  author       = {Haralampos Gavriilidis and
-                  Felix Henze and
-                  Eleni Tzirita Zacharatou and
-                  Volker Markl},
+  author       = {Haralampos Gavriilidis and Felix Henze and Eleni Tzirita Zacharatou and Volker Markl},
   title        = {SheetReader: Efficient Specialized Spreadsheet Parsing},
   journal      = {Inf. Syst.},
   volume       = {115},
   pages        = {102183},
   year         = {2023},
-  url          = {https://doi.org/10.1016/j.is.2023.102183},
-  doi          = {10.1016/J.IS.2023.102183},
-  timestamp    = {Mon, 26 Jun 2023 20:54:32 +0200},
-  biburl       = {https://dblp.org/rec/journals/is/GavriilidisHZM23.bib},
-  bibsource    = {dblp computer science bibliography, https://dblp.org}
+  url          = {https://doi.org/10.1016/j.is.2023.102183}
 }
 ```
 
-## Benchmarks
-
-You can find benchmarks in the above-mentioned paper, comparing SheetReader to other XLSX parsers.
-
-Here is a plot of preliminary benchmarks comparing the `sheetreader` DuckDB extension to the `spatial` extension's `st_read` function:
-
-
-![Benchmark](./benchmarks/joined_barplot_benchmark_sf_1.png)
-
-(*System info: 2x Intel(R) Xeon(R) E5530 @ 2.40GHz, 47GiB RAM*)
-
-## Building yourself
-
-First, clone this repository with the `--recurse-submodules` flag --- so you get all the needed source files.
-
-To build the extension, run:
-```sh
-GEN=ninja make
-```
-The main binaries that will be built are:
-```sh
-./build/release/duckdb
-./build/release/extension/sheetreader/sheetreader.duckdb_extension
-```
-- `duckdb` is the binary for the DuckDB shell with the extension code automatically loaded.
-- `sheetreader.duckdb_extension` is the loadable binary as it would be distributed.
-
-### Running the extension
-
-To run the self-built extension code, simply start the shell with `./build/release/duckdb`.
+---
+*Logo design by Stefanie Lenk*

@@ -1,97 +1,52 @@
-# SheetReader DuckDB Docker Demo
+# SheetReader DuckDB Docker Sandbox
 
-Demo of the **sheetreader-duckdb** extension with DuckDB v1.4.0+ compatibility.
+This directory provides an isolated environment to test the **sheetreader-duckdb** extension. It includes pre-configured tools for building from source For a quick, clean trial using the **v0.2.0 binaries**:
 
-## Prerequisites
+## Usage Guide
 
-- Docker and Docker Compose installed and running
+The following commands assume you are inside the `docker-demo/` directory.
 
-## DuckDB v1.4.0 Extension Verification
+### 1. Test Official Release (v0.2.0)
+This is the fastest way to try the extension. It downloads the pre-compiled binary directly from GitHub.
 
-This setup allows you to verify that the sheetreader extension works correctly with DuckDB v1.4.0+.
-
-### Build and Test the Extension
-
-**Step 1: Navigate to the demo directory**
 ```bash
-cd docker-demo
+docker compose run --rm sheetreader-dev duckdb -unsigned -c ".read /workspace/demo_release.sql"
 ```
 
-**Step 2: Build the Docker image**
+### 2. Test Community Repository
+Simulate the end-user experience of installing via DuckDB's community index.
+
 ```bash
-docker compose build
+docker compose run --rm sheetreader-dev duckdb -c ".read /workspace/demo_community.sql"
 ```
 
-**Step 3: Build the extension from source**
+### 3. Build & Develop from Source
+For contributors wanting to test local modifications in a clean environment.
+
 ```bash
-docker compose run --rm sheetreader-dev bash -c "GEN=ninja NINJA_BUILD_FLAGS='-j2' make"
+# Start background environment
+docker compose up -d
+
+# Enter container
+docker compose exec sheetreader-dev bash
+
+# Build & Run (Inside container)
+GEN=ninja make release
+duckdb -c ".read demo_source.sql"
 ```
 
-This will:
-- Build DuckDB v1.4.0+ from source
-- Compile the sheetreader extension with the new API
-- Create a DuckDB binary with the extension pre-loaded
+## Expected Execution Result
 
-**Step 4: Run the verification test**
-```bash
-docker compose run --rm sheetreader-dev bash -c "./build/release/duckdb < docker-demo/test_verification.sql"
+Upon success, the SQL demos will query the local `test.xlsx` and display:
+
+```text
+┌─────────┬────────┬──────────┐
+│  Name   │  Age   │   City   │
+│ varchar │ double │ varchar  │
+├─────────┼────────┼──────────┤
+│ Alice   │   30.0 │ New York │
+│ Bob     │   25.0 │ London   │
+└─────────┴────────┴──────────┘
+
+=== Demo completed successfully! ===
 ```
-
-**Expected output:**
-```
-┌──────────┐
-│ Numeric0 │
-│  double  │
-├──────────┤
-│     92.0 │
-│     48.0 │
-│     99.0 │
-│     35.0 │
-│     97.0 │
-└──────────┘
-```
-
-If you see this output, the extension is working correctly with DuckDB v1.4.0+! ✅
-
----
-
-## Interactive Development
-
-For interactive development and testing:
-
-**Start an interactive shell:**
-```bash
-docker compose run --rm sheetreader-dev bash
-```
-
-**Inside the container, you can:**
-```bash
-# Build the extension
-GEN=ninja make
-
-
-# start DuckDB interactively
-./build/release/duckdb
-```
-
-**Inside DuckDB, try queries:**
-```sql
--- Query the Excel file
-SELECT * FROM sheetreader('docker-demo/test.xlsx');
-
-```
-
-**Exit:**
-```
-.exit  # Exit DuckDB
-exit   # Exit container
-```
-
----
-
-## Files
-
-- **Dockerfile** - Ubuntu 22.04 with build dependencies (git, cmake, ninja, etc.)
-- **docker-compose.yml** - Docker Compose setup with volume mounts and ccache
-- **test.xlsx** - Sample Excel file with test data
-- **test_verification.sql** - Verification query for testing
