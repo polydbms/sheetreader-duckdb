@@ -26,8 +26,8 @@ jobs:
         run: |
           for file in $(find artifacts -name "*.duckdb_extension"); do
             dir=$(basename $(dirname "$file"))
-            # Transform "sheetreader-vX.Y.Z-extension-PLATFORM" -> "sheetreader-ext-v0.2.0-for-duckdb-vX.Y.Z-PLATFORM"
-            clean_name=$(echo $dir | sed "s/sheetreader-v\(.*\)-extension-\(.*\)/sheetreader-ext-v0.2.0-for-duckdb-v\1-\2/")
+            # Transform "sheetreader-vX.Y.Z-extension-PLATFORM" -> "sheetreader-ext-vA.B.C-for-duckdb-vX.Y.Z-PLATFORM"
+            clean_name=$(echo $dir | sed "s/sheetreader-v\(.*\)-extension-\(.*\)/sheetreader-ext-${{ github.ref_name }}-for-duckdb-v\1-\2/")
             mv "$file" "artifacts/${clean_name}.duckdb_extension"
           done
           gzip artifacts/*.duckdb_extension
