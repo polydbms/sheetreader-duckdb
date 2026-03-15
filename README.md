@@ -109,12 +109,12 @@ Inside the container, you can run `duckdb -c ".read demo_community.sql"` to see 
 
 SheetReader is also available for other environments:
 
-| Environment | Project | Key Feature |
-| :--- | :--- | :--- |
-| **C++** | [**sheetreader-core**](https://github.com/polydbms/sheetreader-core) | High-performance C++ core parsing engine |
-| **Python** | [**sheetreader-python**](https://github.com/polydbms/sheetreader-python) | Fast Excel parsing for Python (e.g., pandas) |
-| **R** | [**SheetReader-r**](https://github.com/fhenz/SheetReader-r) | Efficient Excel parsing for R (e.g., dataframes) |
-| **PostgreSQL** | [**pg_sheet_fdw**](https://github.com/polydbms/pg_sheet_fdw) | Foreign Data Wrapper (FDW) for Excel |
+| Environment | Project | Description | Availability |
+| :--- | :--- | :--- | :--- |
+| **C++** | [**sheetreader-core**](https://github.com/polydbms/sheetreader-core) | Core C++ parsing engine | [**GitHub**](https://github.com/polydbms/sheetreader-core) |
+| **Python** | [**sheetreader-python**](https://github.com/polydbms/sheetreader-python) | NumPy-backed bindings for ingestion into pandas DataFrames | [**PyPI**](https://pypi.org/project/pysheetreader/) |
+| **R** | [**SheetReader-r**](https://github.com/fhenz/SheetReader-r) | Rcpp-based bindings for loading into R DataFrames | [**CRAN**](https://cran.r-project.org/package=SheetReader) |
+| **PostgreSQL** | [**pg_sheet_fdw**](https://github.com/polydbms/pg_sheet_fdw) | FDW for registering Excel files as tables | [**PGXN**](https://pgxn.org/dist/pg_sheet_fdw/) |
 
 ---
 
