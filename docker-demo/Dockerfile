@@ -1,5 +1,5 @@
 # Use Ubuntu as base image
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
