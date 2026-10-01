@@ -1,0 +1,40 @@
+# name: test/sql/basic.test
+# description: Basic sheetreader reads with header auto-detection
+# group: [sheetreader]
+
+require sheetreader
+
+# Pin threads=1: tiny fixtures can fail type probing when the first thread
+# buffer is empty/partial under high default thread counts.
+
+# Auto-detect header when first row is all strings and second is not
+query III
+SELECT * FROM sheetreader('test/sql/data/people.xlsx', threads=1) ORDER BY Name;
+----
+Alice	30.0	New York
+Bob	25.0	London
+
+query IIIIII
+DESCRIBE SELECT * FROM sheetreader('test/sql/data/people.xlsx', threads=1);
+----
+Name	VARCHAR	YES	NULL	NULL	NULL
+Age	DOUBLE	YES	NULL	NULL	NULL
+City	VARCHAR	YES	NULL	NULL	NULL
+
+query I
+SELECT COUNT(*) FROM sheetreader('test/sql/data/people.xlsx', threads=1);
+----
+2
+
+# Numeric-only sheet: no header detection, generic column names
+query II
+SELECT * FROM sheetreader('test/sql/data/no_header.xlsx', threads=1) ORDER BY Numeric0;
+----
+1.0	2.0
+3.0	4.0
+
+query IIIIII
+DESCRIBE SELECT * FROM sheetreader('test/sql/data/no_header.xlsx', threads=1);
+----
+Numeric0	DOUBLE	YES	NULL	NULL	NULL
+Numeric1	DOUBLE	YES	NULL	NULL	NULL

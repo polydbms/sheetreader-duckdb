@@ -1,0 +1,28 @@
+# name: test/sql/errors.test
+# description: Error cases for sheetreader parameters and inputs
+# group: [sheetreader]
+
+require sheetreader
+
+statement error
+SELECT * FROM sheetreader('test/sql/data/people.xlsx', sheet_name='Sheet1', sheet_index=1, threads=1);
+----
+Sheet index & sheet name cannot be set at the same time
+
+statement error
+SELECT * FROM sheetreader('test/sql/data/does_not_exist.xlsx', threads=1);
+----
+
+statement error
+SELECT * FROM sheetreader('test/sql/data/multi_sheet.xlsx', sheet_name='Missing', threads=1);
+----
+
+statement error
+SELECT * FROM sheetreader('test/sql/data/people.xlsx', threads=0);
+----
+Number of threads must be greater than 0
+
+statement error
+SELECT * FROM sheetreader('test/sql/data/people.xlsx', has_header=true, types=['VARCHAR'], threads=1);
+----
+Number of user defined types is less than number of columns

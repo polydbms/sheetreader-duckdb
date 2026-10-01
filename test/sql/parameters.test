@@ -1,0 +1,59 @@
+# name: test/sql/parameters.test
+# description: Named parameters for sheetreader
+# group: [sheetreader]
+
+require sheetreader
+
+# Explicit header
+query III
+SELECT * FROM sheetreader('test/sql/data/people.xlsx', has_header=true, threads=1) ORDER BY Name;
+----
+Alice	30.0	New York
+Bob	25.0	London
+
+# Sheet by index (1-based) and by name
+query II
+SELECT * FROM sheetreader('test/sql/data/multi_sheet.xlsx', sheet_index=1, threads=1) ORDER BY Product;
+----
+Gadget	20.0
+Widget	10.5
+
+query II
+SELECT * FROM sheetreader('test/sql/data/multi_sheet.xlsx', sheet_name='Sales', threads=1) ORDER BY Product;
+----
+Gadget	20.0
+Widget	10.5
+
+query II
+SELECT * FROM sheetreader('test/sql/data/multi_sheet.xlsx', sheet_name='Employees', threads=1) ORDER BY Name;
+----
+Alice	true
+Bob	false
+
+query II
+SELECT * FROM sheetreader('test/sql/data/multi_sheet.xlsx', sheet_index=2, threads=1) ORDER BY Name;
+----
+Alice	true
+Bob	false
+
+# Skip leading junk rows, then treat next row as header
+query II
+SELECT * FROM sheetreader('test/sql/data/skip_rows.xlsx', skip_rows=2, has_header=true, threads=1) ORDER BY Name;
+----
+x	1.0
+y	2.0
+
+# Mixed types
+query IIII
+SELECT * FROM sheetreader('test/sql/data/types_mixed.xlsx', threads=1) ORDER BY Label;
+----
+false	no	2.0	note2
+true	yes	1.5	note
+
+query IIIIII
+DESCRIBE SELECT * FROM sheetreader('test/sql/data/types_mixed.xlsx', threads=1);
+----
+Flag	BOOLEAN	YES	NULL	NULL	NULL
+Label	VARCHAR	YES	NULL	NULL	NULL
+Score	DOUBLE	YES	NULL	NULL	NULL
+When	VARCHAR	YES	NULL	NULL	NULL

@@ -1,0 +1,47 @@
+# name: test/sql/types.test
+# description: User-defined types and coercion for sheetreader
+# group: [sheetreader]
+
+require sheetreader
+
+# Force all columns to VARCHAR via types + coerce_to_string.
+# Numeric coercion currently uses std::to_string (fixed 6 fractional digits).
+query III
+SELECT * FROM sheetreader(
+	'test/sql/data/people.xlsx',
+	has_header=true,
+	types=['VARCHAR', 'VARCHAR', 'VARCHAR'],
+	coerce_to_string=true,
+	force_types=true,
+	threads=1
+) ORDER BY Name;
+----
+Alice	30.000000	New York
+Bob	25.000000	London
+
+query IIIIII
+DESCRIBE SELECT * FROM sheetreader(
+	'test/sql/data/people.xlsx',
+	has_header=true,
+	types=['VARCHAR', 'VARCHAR', 'VARCHAR'],
+	coerce_to_string=true,
+	force_types=true,
+	threads=1
+);
+----
+Name	VARCHAR	YES	NULL	NULL	NULL
+Age	VARCHAR	YES	NULL	NULL	NULL
+City	VARCHAR	YES	NULL	NULL	NULL
+
+# force_types with incompatible type: mismatched cells become NULL
+query III
+SELECT * FROM sheetreader(
+	'test/sql/data/people.xlsx',
+	has_header=true,
+	types=['VARCHAR', 'BOOLEAN', 'VARCHAR'],
+	force_types=true,
+	threads=1
+) ORDER BY Name;
+----
+Alice	NULL	New York
+Bob	NULL	London
