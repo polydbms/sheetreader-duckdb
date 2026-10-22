@@ -13,10 +13,11 @@ concurrency:
 
 jobs:
   duckdb-stable-build:
-    name: Build extension binaries (DuckDB v1.5.6)
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
+    name: Build extension binaries (DuckDB v2.0.0)
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
     with:
-      duckdb_version: v1.5.6
-      ci_tools_version: v1.5-variegata
+      duckdb_version: v2.0.0
+      ci_tools_version: v2.0-cyanoptera
       extension_name: sheetreader
-      exclude_archs: "windows_amd64_rtools;windows_amd64_mingw"
+      # Community extensions dropped osx_amd64 in DuckDB 2.0; keep Windows rtools/mingw excluded.
+      exclude_archs: "windows_amd64_rtools;windows_amd64_mingw;osx_amd64"

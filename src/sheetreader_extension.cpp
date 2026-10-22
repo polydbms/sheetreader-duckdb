@@ -129,7 +129,7 @@ inline void SetAllInvalid(DataChunk &output, idx_t cardinality) {
 	for (idx_t col = 0; col < output.ColumnCount(); col++) {
 		Vector &vec = output.data[col];
 		// Validity mask saves the information about NULL values
-		auto &validity = FlatVector::Validity(vec);
+		auto &validity = FlatVector::ValidityMutable(vec);
 		validity.SetAllInvalid(cardinality);
 	}
 }
@@ -143,7 +143,7 @@ inline void SetCell(const SRBindData &bind_data, DataChunk &output, vector<DataP
 
 	// Get validity mask of the column and set it to valid (i.e. not NULL)
 	Vector &vec = output.data[column_id];
-	auto &validity = FlatVector::Validity(vec);
+	auto &validity = FlatVector::ValidityMutable(vec);
 	validity.SetValid(row_id);
 
 	// Set the value of the cell to cell in the data chunk
@@ -186,7 +186,7 @@ inline void SetCellString(const SRBindData &bind_data, DataChunk &output, vector
 
 	// Get validity mask of the column and set it to valid (i.e. not NULL)
 	Vector &vec = output.data[column_id];
-	auto &validity = FlatVector::Validity(vec);
+	auto &validity = FlatVector::ValidityMutable(vec);
 	validity.SetValid(row_id);
 
 	// Similar to SetCell() only difference:
@@ -464,7 +464,7 @@ inline void FinishChunk(DataChunk &output, idx_t cardinality, SRGlobalState &gst
 
 	// Indicate how many rows are in the chunk
 	// If cardinality is 0, it means that the chunk is empty and no more rows are to be expected
-	output.SetCardinality(cardinality);
+	output.SetCardinalityUnsafe(cardinality);
 
 	// Increment number of chunks read so far
 	gstate.chunk_count++;
@@ -498,7 +498,7 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 		switch (bind_data.types[col].id()) {
 		case LogicalTypeId::VARCHAR: {
 			Vector &vec = output.data[col];
-			string_t *data_vec = FlatVector::GetData<string_t>(vec);
+			string_t *data_vec = FlatVector::GetDataMutable<string_t>(vec);
 			DataPtr data;
 			data.string_data = data_vec;
 			// Store pointer to data
@@ -507,7 +507,7 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 		}
 		case LogicalTypeId::DOUBLE: {
 			Vector &vec = output.data[col];
-			auto data_vec = FlatVector::GetData<double>(vec);
+			auto data_vec = FlatVector::GetDataMutable<double>(vec);
 			DataPtr data;
 			data.double_data = data_vec;
 			flat_vectors.push_back(data);
@@ -515,7 +515,7 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 		}
 		case LogicalTypeId::BOOLEAN: {
 			Vector &vec = output.data[col];
-			auto data_vec = FlatVector::GetData<bool>(vec);
+			auto data_vec = FlatVector::GetDataMutable<bool>(vec);
 			DataPtr data;
 			data.bool_data = data_vec;
 			flat_vectors.push_back(data);
@@ -523,7 +523,7 @@ inline void SheetreaderCopyTableFun(ClientContext &context, TableFunctionInput &
 		}
 		case LogicalTypeId::DATE: {
 			Vector &vec = output.data[col];
-			auto data_vec = FlatVector::GetData<date_t>(vec);
+			auto data_vec = FlatVector::GetDataMutable<date_t>(vec);
 			DataPtr data;
 			data.date_data = data_vec;
 			flat_vectors.push_back(data);
@@ -625,6 +625,16 @@ inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRBindData &bind_dat
 	return column_names;
 }
 
+
+//! Copy string column names into Identifier bind-output names
+inline void SetBindNames(vector<Identifier> &names, const vector<string> &column_names) {
+	names.clear();
+	names.reserve(column_names.size());
+	for (auto &name : column_names) {
+		names.emplace_back(name);
+	}
+}
+
 //! Bind function for the sheetreader extension
 //! - Gets (named) parameters (filename etc.) of table function and stores them
 //! - Parses the .Xlsx-file
@@ -634,7 +644,7 @@ inline vector<string> GetHeaderNames(vector<XlsxCell> &row, SRBindData &bind_dat
 //! - Creates the bind data object (is subtype of FunctionData) which contains all necessary information for the copy
 //!   and most importantly stores the XlsxFile & XlsxSheet objects
 inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, TableFunctionBindInput &input,
-                                                   vector<LogicalType> &return_types, vector<string> &names) {
+                                                   vector<LogicalType> &return_types, vector<Identifier> &names) {
 
 	// =====================================
 	// Get input parameters & prepare for parsing
@@ -667,13 +677,12 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	// Get named parameters that are needed for creating XlsxFile & XlsxSheet objects and therefore for creating
 	// bind_data
 	for (auto &kv : input.named_parameters) {
-		auto loption = StringUtil::Lower(kv.first);
-		if (loption == "sheet_name") {
+		if (kv.first == "sheet_name") {
 			sheet_name = StringValue::Get(kv.second);
-		} else if (loption == "sheet_index") {
+		} else if (kv.first == "sheet_index") {
 			sheet_index = IntegerValue::Get(kv.second);
 			sheet_index_set = true;
-		} else if (loption == "has_header") {
+		} else if (kv.first == "has_header") {
 			use_header = BooleanValue::Get(kv.second);
 		} else {
 			continue;
@@ -706,20 +715,19 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 	// Get all left named parameters
 	// You can find the documentation of the named parameters in the README.md and header file
 	for (auto &kv : input.named_parameters) {
-		auto loption = StringUtil::Lower(kv.first);
-		if (loption == "threads") {
+		if (kv.first == "threads") {
 			bind_data->number_threads = IntegerValue::Get(kv.second);
 			if (bind_data->number_threads <= 0) {
 				throw BinderException("Number of threads must be greater than 0");
 			}
-		} else if (loption == "skip_rows") {
+		} else if (kv.first == "skip_rows") {
 			// Default: 0
 			bind_data->skip_rows = IntegerValue::Get(kv.second);
-		} else if (loption == "coerce_to_string") {
+		} else if (kv.first == "coerce_to_string") {
 			bind_data->coerce_to_string = BooleanValue::Get(kv.second);
-		} else if (loption == "force_types") {
+		} else if (kv.first == "force_types") {
 			bind_data->force_types = BooleanValue::Get(kv.second);
-		} else if (loption == "types") {
+		} else if (kv.first == "types") {
 			// Get all types as strings defined in list/array
 			auto &children = ListValue::GetChildren(kv.second);
 			// Convert strings to LogicalTypes & check if they are supported
@@ -743,7 +751,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			has_user_types = true;
 
 			// We already handled them before
-		} else if (loption == "sheet_name" || loption == "sheet_index" || loption == "has_header") {
+		} else if (kv.first == "sheet_name" || kv.first == "sheet_index" || kv.first == "has_header") {
 			continue;
 		} else {
 			throw BinderException("Unknown named parameter");
@@ -874,7 +882,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			}
 
 			// Set column names to header names
-			names = header_names;
+			SetBindNames(names, header_names);
 			bind_data->names = header_names;
 		} else {
 			// If first row is not a header row, we use the cell types of the first row for the column types
@@ -882,7 +890,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 			bind_data->types = column_types_first_row;
 
 			// Use generic column names
-			names = column_names_first_row;
+			SetBindNames(names, column_names_first_row);
 			bind_data->names = column_names_first_row;
 		}
 	}
@@ -932,7 +940,7 @@ inline unique_ptr<FunctionData> SheetreaderBindFun(ClientContext &context, Table
 
 		// Concat additional column names
 		bind_data->names.insert(bind_data->names.end(), additional_column_names.begin(), additional_column_names.end());
-		names = bind_data->names;
+		SetBindNames(names, bind_data->names);
 
 		D_ASSERT(return_types.size() == names.size());
 	}
@@ -951,18 +959,18 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                                         SheetreaderBindFun, SRGlobalTableFunctionState::Init,
 	                                         SRLocalTableFunctionState::Init);
 
-	// Define all named parameters
-	sheetreader_table_function.named_parameters["sheet_name"] = LogicalType::VARCHAR;
-	sheetreader_table_function.named_parameters["sheet_index"] = LogicalType::INTEGER;
-	sheetreader_table_function.named_parameters["threads"] = LogicalType::INTEGER;
-	sheetreader_table_function.named_parameters["skip_rows"] = LogicalType::INTEGER;
-	sheetreader_table_function.named_parameters["has_header"] = LogicalType::BOOLEAN;
-	// TODO: Support STRUCT, i.e. { 'column_name': 'type', ... }
-	// We would use ANY here, similar to read_csv.cpp, but we expect a STRUCT or LIST
-	// sheetreader_table_function.named_parameters["types"] = LogicalType::ANY;
-	sheetreader_table_function.named_parameters["types"] = LogicalType::LIST(LogicalType::VARCHAR);
-	sheetreader_table_function.named_parameters["force_types"] = LogicalType::BOOLEAN;
-	sheetreader_table_function.named_parameters["coerce_to_string"] = LogicalType::BOOLEAN;
+	// Define all named parameters (DuckDB 2.0 typed kwargs)
+	sheetreader_table_function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+		options.Add("sheet_name", LogicalType::VARCHAR)
+		    .Add("sheet_index", LogicalType::INTEGER)
+		    .Add("threads", LogicalType::INTEGER)
+		    .Add("skip_rows", LogicalType::INTEGER)
+		    .Add("has_header", LogicalType::BOOLEAN)
+		    // TODO: Support STRUCT, i.e. { 'column_name': 'type', ... }
+		    .Add("types", LogicalType::LIST(LogicalType::VARCHAR))
+		    .Add("force_types", LogicalType::BOOLEAN)
+		    .Add("coerce_to_string", LogicalType::BOOLEAN);
+	});
 
 	loader.RegisterFunction(sheetreader_table_function);
 }
@@ -986,18 +994,8 @@ std::string SheetreaderExtension::Version() const {
 
 extern "C" {
 
-DUCKDB_EXTENSION_API void sheetreader_init(duckdb::DatabaseInstance &db) {
-	duckdb::DuckDB db_wrapper(db);
-	db_wrapper.LoadStaticExtension<duckdb::SheetreaderExtension>();
-}
-
-DUCKDB_EXTENSION_API const char *sheetreader_version() {
-	return duckdb::DuckDB::LibraryVersion();
-}
-
-DUCKDB_EXTENSION_API void sheetreader_duckdb_cpp_init(duckdb::ExtensionLoader &loader) {
-	duckdb::SheetreaderExtension extension;
-	extension.Load(loader);
+DUCKDB_CPP_EXTENSION_ENTRY(sheetreader, loader) {
+	duckdb::LoadInternal(loader);
 }
 }
 

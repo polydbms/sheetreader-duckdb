@@ -1,15 +1,15 @@
 # Extension updating
 
-This repository keeps a branch per DuckDB minor line (e.g. `1.4`, `1.5`), matching how DuckDB itself maintains
+This repository keeps a branch per DuckDB minor line (e.g. `1.4`, `1.5`, `2.0`), matching how DuckDB itself maintains
 `vx.y-codename` release branches. `main` tracks the newest line; older lines stay on their version branch for
 maintenance builds.
 
 ## After a DuckDB patch/minor release lands
 
-1. Create or check out the version branch for that line, e.g. `1.5` for DuckDB 1.5.x.
+1. Create or check out the version branch for that line, e.g. `2.0` for DuckDB 2.0.x.
 2. Bump submodules on that branch:
-   - `./duckdb` → latest tag on that line (e.g. `v1.5.6`)
-   - `./extension-ci-tools` → matching branch/tag (e.g. `v1.5-variegata` / `v1.5.6`)
+   - `./duckdb` → latest tag on that line (e.g. `v2.0.0`)
+   - `./extension-ci-tools` → matching branch/tag (e.g. `v2.0-cyanoptera`)
 3. Bump `.github/workflows/MainDistributionPipeline.yml`:
    - `duckdb_version` → that tag
    - reusable workflow ref / `ci_tools_version` → matching CI tools branch
