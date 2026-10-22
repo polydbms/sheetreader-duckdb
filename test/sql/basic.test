@@ -1,0 +1,18 @@
+# name: test/sql/basic.test
+# description: Basic sheetreader smoke tests
+# group: [sheetreader]
+
+require sheetreader
+
+# Pin threads=1 so tiny fixtures stay stable under parallelism.
+
+query III
+SELECT * FROM sheetreader('test/sql/data/people.xlsx', threads=1) ORDER BY Name;
+----
+Alice	30.0	New York
+Bob	25.0	London
+
+query I
+SELECT COUNT(*) FROM sheetreader('test/sql/data/people.xlsx', threads=1);
+----
+2
